@@ -73,6 +73,13 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
     )
 
     if verdict.action is GuardAction.CONTINUE:
+        # A watchdog that prints nothing when healthy is indistinguishable from
+        # one that has silently died, so it always reports what it saw.
+        print(
+            f"[{now_utc():%H:%M:%S}] ok  equity=${equity:,.2f}  "
+            f"day={verdict.daily_pnl_pct:+.2f}%  dd={verdict.drawdown_pct:+.2f}%  "
+            f"peak=${peak:,.0f}  {verdict.reason}"
+        )
         return verdict.action
 
     audit.append(

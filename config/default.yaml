@@ -40,6 +40,14 @@ signal:
   min_confidence: 0.6
   edge_ratio_debit: 1.3          # expected/implied above this -> long convexity
   edge_ratio_credit: 0.7         # expected/implied below this -> short premium
+  # A news event is a jump, not diffusion: it resolves at once rather than
+  # accumulating over the horizon. Scaling implied vol down by sqrt(t) to a few
+  # hours therefore understates what the market is really pricing for the event
+  # and makes every story look mispriced. We never scale below one session.
+  min_horizon_hours: 6.5
+  # An implausibly large edge is a data problem, not an opportunity - the same
+  # reasoning that rejects a credit above the spread width.
+  max_plausible_ratio: 5.0
 
 universe:
   size: 50
@@ -48,8 +56,12 @@ universe:
 llm:
   provider: fireworks
   base_url: "https://api.fireworks.ai/inference/v1"
-  analyst_model: "accounts/fireworks/models/qwen3-235b-a22b-instruct"   # confirm against live catalog
-  report_model: "accounts/fireworks/models/deepseek-v3"                  # confirm against live catalog
+  # Verified against this account's catalogue with `python -m glassbox.verify_llm`.
+  # Analyst runs on every surviving news event under time pressure, so it is a
+  # small fast model doing constrained extraction, not reasoning. The nightly
+  # report runs once and can afford a large model.
+  analyst_model: "accounts/fireworks/models/gpt-oss-120b"
+  report_model: "accounts/fireworks/models/kimi-k3"
   analyst_max_tokens: 600
   timeout_seconds: 20
 

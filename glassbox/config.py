@@ -61,6 +61,8 @@ class SignalCfg(BaseModel):
     min_confidence: float
     edge_ratio_debit: float
     edge_ratio_credit: float
+    min_horizon_hours: float
+    max_plausible_ratio: float
 
 
 class UniverseCfg(BaseModel):
