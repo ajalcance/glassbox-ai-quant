@@ -116,6 +116,7 @@ fresh and only ever sees contest trading.
 
 | # | Drill | Proves |
 |---|---|---|
+| 0 | **Simulated lifecycle** | Everything downstream of a fill — position state, reconciliation, heat, barriers, close, P&L, labelling, both learners, audit chain — against real quotes with only the fill invented. Runs with the market closed |
 | 1 | **Round trip** | A marketable spread fills, position is recorded, reconciliation stays clean, the manager evaluates it, the close fills, P&L is realised, the outcome is labelled, the bandit posterior updates and a training row appears |
 | 2 | **Supervisor flatten** | With a real position open, the kill switch causes the supervisor to actually close it |
 | 3 | **Reconciliation divergence** | An induced mismatch between local state and the broker halts trading |

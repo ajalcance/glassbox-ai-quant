@@ -24,6 +24,8 @@ report:      ## write today's report now, ignoring the schedule
 scheduler:   ## run the job scheduler (report + model refit)
 	uv run python -m glassbox.scheduler
 
+drill-sim:   ## full lifecycle with a simulated fill (works market-closed)
+	uv run python -m glassbox.drills simulate
 drill-trip:  ## LIVE: open a real spread, verify everything, close it
 	uv run python -m glassbox.drills round_trip
 drill-flat:  ## LIVE: open a position, kill switch, verify supervisor flattens

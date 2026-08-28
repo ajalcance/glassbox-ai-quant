@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from datetime import timedelta
 
 from glassbox.audit import AuditLog
 from glassbox.chain import build_structure
@@ -195,7 +196,8 @@ def drill_round_trip() -> int:
         )
 
         _step(7, "Closing via a deadline that has already passed")
-        forced = evaluate_position(view, cfg, now_utc(), deadline=now_utc())
+        past = now_utc() - timedelta(minutes=1)
+        forced = evaluate_position(view, cfg, now_utc(), deadline=past)
         if not forced.should_close:
             raise DrillFailed("deadline did not force a close")
         close_coid = close_order_id(position_id, str(forced.barrier))
@@ -344,6 +346,20 @@ def drill_cleanup() -> int:
     _cfg, store, _audit, client, _data = _ctx()
     try:
         print("CLEANUP")
+
+        # Local drill state first. A failed drill leaves an open position in the
+        # store; reconciliation then correctly flags a divergence against the
+        # broker and every later drill fails on state the last one abandoned.
+        stale = [
+            r["position_id"]
+            for r in store.open_positions()
+            if str(r["position_id"]).startswith(("pos-drill-", "pos-sim-", "pos-flatten-"))
+            or r["position_id"] == "pos-phantom"
+        ]
+        for position_id in stale:
+            store.upsert_position(position_id, status="closed")
+        print(f"  closed {len(stale)} stale drill position(s) in local state")
+
         orders = client.cancel_orders()
         print(f"  cancelled {len(orders or [])} open order(s)")
         try:
@@ -363,7 +379,184 @@ def drill_cleanup() -> int:
         store.close()
 
 
+class SimulatedBroker:
+    """Fills instantly and remembers what it filled.
+
+    Everything else in the simulate drill is real: the chain, the quotes, the
+    structure, the max-loss arithmetic, the barrier evaluation, the store, the
+    reconciliation logic and both learners. Only the fill is invented, because
+    that is the one thing the market has to be open for.
+
+    Fills are labelled `sim-` so a simulated position can never be mistaken for
+    a real one in the audit log.
+    """
+
+    def __init__(self):
+        self.legs: dict[str, int] = {}
+        self.orders: list = []
+
+    def submit_order(self, request):
+        self.orders.append(request)
+        for leg in request.legs:
+            signed = leg.ratio_qty * int(request.qty)
+            if str(leg.side).split(".")[-1].lower() == "sell":
+                signed = -signed
+            self.legs[leg.symbol] = self.legs.get(leg.symbol, 0) + signed
+        self.legs = {k: v for k, v in self.legs.items() if v != 0}
+        return type(
+            "SimOrder",
+            (),
+            {
+                "id": f"sim-{len(self.orders)}",
+                "status": "filled",
+                "filled_avg_price": request.limit_price,
+            },
+        )()
+
+    def get_all_positions(self):
+        return [
+            type("SimPos", (), {"symbol": sym, "qty": str(qty)})() for sym, qty in self.legs.items()
+        ]
+
+    def cancel_order_by_id(self, order_id):
+        return None
+
+
+def drill_simulate() -> int:
+    """Full lifecycle with a simulated fill. Runs with the market closed."""
+    import json
+
+    cfg, store, audit, _client, data = _ctx()
+    broker = SimulatedBroker()
+    try:
+        print("SIMULATED LIFECYCLE DRILL")
+        print("  Real chain, real quotes, real barrier maths, real learners.")
+        print("  Only the fill is simulated — that is the part needing an open market.\n")
+
+        _step(1, "Building a spread from the live chain")
+        structure, mid, _price = _marketable_spread(data)
+        risk = max_loss_per_spread(structure, mid)
+        print(f"    {structure_key(structure)}")
+        print(f"    net {mid:+.2f}, max loss ${risk:.0f}/spread")
+
+        _step(2, "Opening through the real router against a simulated broker")
+        signal_id = f"sim-{now_utc():%H%M%S}"
+        position_id = f"pos-{signal_id}"
+        store.upsert_position(
+            position_id,
+            signal_id=signal_id,
+            underlying=DRILL_SYMBOL,
+            kind=str(structure.kind),
+            legs_json=json.dumps(legs_as_dicts(structure)),
+            qty=DRILL_QTY,
+            entry_price=mid,
+            max_loss=risk * DRILL_QTY,
+            status="opening",
+            horizon_hours=24.0,
+            opened_at=now_utc().isoformat(),
+            regime=str(VolRegime.NORMAL),
+        )
+        router = OrderRouter(broker, store, audit)
+        coid = client_order_id(signal_id, structure_key(structure))
+        order = router.submit_structure(structure, DRILL_QTY, mid, coid, position_id)
+        store.upsert_position(position_id, status="open")
+        print(f"    filled at {order.filled_avg_price} ({order.id})")
+
+        _step(3, "Reconciling local state against the broker")
+        from glassbox.reconcile import enforce
+
+        result = enforce(store, audit, broker.get_all_positions())
+        if not result.ok:
+            raise DrillFailed(f"reconciliation diverged after opening: {result.reason}")
+        print(f"    {result.reason}")
+
+        _step(4, "Portfolio heat should reflect the open position")
+        heat = store.total_heat()
+        if heat <= 0:
+            raise DrillFailed("open position contributed no heat")
+        cap = cfg.account.starting_equity * cfg.risk.portfolio_heat_pct / 100
+        print(f"    ${heat:,.0f} of ${cap:,.0f} cap")
+
+        _step(5, "Pricing the position and evaluating the barriers")
+        from glassbox.manage import PositionView, evaluate_position
+
+        current = data.structure_price(structure)
+        view = PositionView(
+            position_id=position_id,
+            kind=structure.kind,
+            qty=DRILL_QTY,
+            entry_price=mid,
+            current_price=current,
+            max_loss_per_spread=risk,
+            opened_at=now_utc(),
+            horizon_hours=24.0,
+            hours_to_expiry=data.structure_hours_to_expiry(structure),
+        )
+        peak = store.record_peak_pnl(position_id, view.unrealized_pnl)
+        decision = evaluate_position(view, cfg, now_utc())
+        print(f"    unrealised ${view.unrealized_pnl:+,.2f} (peak ${peak:+,.2f})")
+        print(f"    -> {decision.barrier}: {decision.reason}")
+
+        _step(6, "Forcing a close through an elapsed deadline")
+        past = now_utc() - timedelta(minutes=1)
+        forced = evaluate_position(view, cfg, now_utc(), deadline=past)
+        if not forced.should_close or forced.label is None:
+            raise DrillFailed("deadline did not force a labelled close")
+        close_coid = close_order_id(position_id, str(forced.barrier))
+        router.submit_structure(
+            structure, DRILL_QTY, current, close_coid, position_id, closing=True
+        )
+        store.close_position(
+            position_id,
+            str(forced.barrier),
+            forced.label,
+            forced.unrealized_pnl,
+            now_utc().isoformat(),
+        )
+        print(
+            f"    closed on {forced.barrier}, label={forced.label}, "
+            f"P&L ${forced.unrealized_pnl:+,.2f}"
+        )
+
+        _step(7, "Broker should be flat and heat released")
+        if broker.legs:
+            raise DrillFailed(f"legs still open after close: {broker.legs}")
+        if store.total_heat() != 0:
+            raise DrillFailed("closed position still contributing heat")
+        if not enforce(store, audit, broker.get_all_positions()).ok:
+            raise DrillFailed("reconciliation diverged after closing")
+        print("    flat, heat released, reconciliation clean")
+
+        _step(8, "Feeding the learners")
+        bandit = ThompsonBandit(store)
+        bandit.update(structure.kind, VolRegime.NORMAL, won=bool(forced.label))
+        posteriors = store.bandit_posteriors(str(VolRegime.NORMAL))
+        if str(structure.kind) not in posteriors:
+            raise DrillFailed("bandit posterior did not update")
+        rows = [r for r in store.training_rows() if r["position_id"] == position_id]
+        if not rows:
+            raise DrillFailed("no training row written")
+        print(f"    bandit {structure.kind!s}: {posteriors[str(structure.kind)]}")
+        print(f"    training rows now: {len(store.training_rows())}")
+
+        _step(9, "Audit chain should still verify")
+        from glassbox.audit import AuditLog as _Audit
+
+        ok, n = _Audit.verify_chain(audit.dir / f"{now_utc():%Y-%m-%d}.jsonl")
+        if not ok:
+            raise DrillFailed("audit chain broken")
+        print(f"    verified, {n} records today")
+
+        print("\nSIMULATED LIFECYCLE DRILL PASSED")
+        print("Everything downstream of a fill is proven. Tonight's round_trip")
+        print("drill proves the fill itself.")
+        return 0
+    finally:
+        store.close()
+
+
 DRILLS = {
+    "simulate": drill_simulate,
     "round_trip": drill_round_trip,
     "flatten": drill_flatten,
     "reconcile": drill_reconcile,
