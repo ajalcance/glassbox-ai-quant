@@ -27,7 +27,13 @@ from glassbox.chain import (
 from glassbox.execution.ids import client_order_id
 from glassbox.gate import GateContext, evaluate
 from glassbox.llm import LlmSchemaError, LlmUnavailableError
-from glassbox.manage import Action, PositionView, evaluate_position
+from glassbox.manage import (
+    Action,
+    Barrier,
+    ManageDecision,
+    PositionView,
+    evaluate_position,
+)
 from glassbox.ml.bandit import classify_regime
 from glassbox.ml.features import build_features
 from glassbox.portfolio import snapshot
@@ -174,6 +180,12 @@ class Trader:
                 **view.model_dump(),
             },
         )
+
+        # The analyst has spoken. Before asking whether to open anything, ask
+        # whether this reverses a view we are already holding — one model call,
+        # two consumers.
+        if not getattr(self, "_floor_mode", False):
+            self.check_contradiction(item.symbol, view)
 
         # 3. market context
         try:
@@ -416,6 +428,15 @@ class Trader:
             status="opening",
             horizon_hours=effective_horizon,
             opened_at=self.clock().isoformat(),
+            # The regime the bandit will be rewarded against when this closes,
+            # the features the meta-labeler will train on, and the thesis the
+            # completion and contradiction checks evaluate. All of it has to be
+            # captured now: none of it can be reconstructed after the fact.
+            regime=str(regime),
+            features_json=json.dumps(features.as_dict()),
+            thesis_direction=str(view.direction),
+            thesis_move_pct=float(view.expected_move_pct),
+            entry_spot=float(spot),
         )
         self.router.submit_structure(structure, sizing.qty, net_price, coid, position_id)
         return Outcome(
@@ -426,6 +447,64 @@ class Trader:
         )
 
     # -- position management ---------------------------------------------
+    # -- thesis invalidation ----------------------------------------------
+    def check_contradiction(self, symbol: str, view) -> list[str]:
+        """Close open positions whose thesis this news reverses.
+
+        The bar is deliberately higher than the entry bar. An unrelated story
+        reading mildly bearish must not churn a position, so only a confident
+        and material reversal counts, and only against a directional thesis — a
+        vol_only view predicts magnitude without a sign and cannot be reversed
+        by direction.
+        """
+        cfg = self.cfg.manage
+        if not cfg.exit_on_contradiction or view.direction not in ("up", "down"):
+            return []
+        if (
+            view.confidence < cfg.contradiction_min_confidence
+            or view.materiality < cfg.contradiction_min_materiality
+        ):
+            return []
+
+        opposite = "down" if view.direction == "up" else "up"
+        closed = []
+        for row in self.store.open_positions_for(symbol):
+            if row["thesis_direction"] != opposite:
+                continue
+            try:
+                position = self._position_view(row)
+            except (KeyError, ValueError) as e:
+                self.audit.append(
+                    "contradiction_error",
+                    {"position_id": row["position_id"], "error": f"{type(e).__name__}: {e}"},
+                )
+                continue
+
+            pnl = position.unrealized_pnl
+            decision = ManageDecision(
+                Action.CLOSE,
+                Barrier.THESIS_BROKEN,
+                f"news reverses the {opposite} thesis: {view.direction} at "
+                f"confidence {view.confidence:.2f}, materiality {view.materiality:.2f}",
+                pnl,
+                1 if pnl > 0 else 0,
+            )
+            self.audit.append(
+                "thesis_broken",
+                {
+                    "position_id": position.position_id,
+                    "symbol": symbol,
+                    "held_thesis": opposite,
+                    "new_direction": view.direction,
+                    "confidence": view.confidence,
+                    "materiality": view.materiality,
+                    "unrealized_pnl": pnl,
+                },
+            )
+            self._close(row, position, decision, self.clock())
+            closed.append(position.position_id)
+        return closed
+
     def manage_positions(self, now: datetime, deadline: datetime | None = None) -> list[Outcome]:
         """Walk every open position through the triple barrier."""
         outcomes = []
@@ -695,7 +774,19 @@ class Trader:
             horizon_hours=float(row["horizon_hours"] or 24.0),
             hours_to_expiry=self.data.structure_hours_to_expiry(structure),
             peak_pnl=float(row["peak_pnl"] or 0.0),
+            thesis_direction=row["thesis_direction"] or "",
+            thesis_move_pct=float(row["thesis_move_pct"] or 0.0),
+            entry_spot=float(row["entry_spot"] or 0.0),
+            current_spot=self._safe_spot(row["underlying"]),
         )
+
+    def _safe_spot(self, symbol: str) -> float:
+        """Spot for the completion check. Unavailable means zero, which the
+        check reads as "cannot evaluate" rather than "no movement"."""
+        try:
+            return float(self.data.spot(symbol))
+        except (ValueError, KeyError):
+            return 0.0
 
     @staticmethod
     def _with_peak(view: PositionView, peak: float) -> PositionView:

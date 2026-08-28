@@ -23,6 +23,16 @@ regardless of where P&L happens to be:
   * **Macro risk**: short premium is closed before a scheduled release. The
     gate refuses to *open* one into an event; permitting the *hold* would guard
     the front door and leave the back one open.
+  * **Thesis complete**: the underlying has travelled the distance the entry
+    thesis predicted. The forecast move has happened, so there is nothing left
+    to wait for — a different question from whether P&L reached its target, and
+    on a debit position whose implied volatility collapsed the two disagree.
+  * **Thesis broken**: later news reverses the view the position was opened on.
+    Handled in the orchestrator, since it is triggered by an arriving story
+    rather than by a tick.
+
+An entry thesis should have an expiry condition, not only an expiry date. The
+last two supply the condition.
 
 **Position size never changes once opened.** The manager is deliberately binary:
 a position is held whole or closed whole. Scaling out would be the obvious
@@ -63,6 +73,8 @@ class Barrier(StrEnum):
     DEADLINE = "deadline"
     EXPIRY_RISK = "expiry_risk"
     MACRO_RISK = "macro_risk"
+    THESIS_BROKEN = "thesis_broken"
+    THESIS_COMPLETE = "thesis_complete"
     NONE = "none"
 
 
@@ -85,6 +97,11 @@ class PositionView:
     horizon_hours: float
     hours_to_expiry: float
     peak_pnl: float = 0.0  # best unrealised P&L seen, dollars
+    # The thesis this position was opened on, for the completion check.
+    thesis_direction: str = ""
+    thesis_move_pct: float = 0.0
+    entry_spot: float = 0.0
+    current_spot: float = 0.0
 
     @property
     def is_credit(self) -> bool:
@@ -107,6 +124,31 @@ class PositionView:
         the way from the order router.
         """
         return (self.current_price - self.entry_price) * 100 * self.qty
+
+    @property
+    def move_since_entry_pct(self) -> float:
+        """Signed percentage move in the underlying since entry."""
+        if self.entry_spot <= 0 or self.current_spot <= 0:
+            return 0.0
+        return (self.current_spot - self.entry_spot) / self.entry_spot * 100
+
+    def thesis_move_achieved(self, cfg) -> bool:
+        """Has the underlying travelled the distance the thesis predicted?
+
+        Direction matters: a stock that moved the predicted distance the *wrong*
+        way has not completed the thesis, it has falsified it — and that is the
+        stop's job, not this one.
+        """
+        if self.thesis_move_pct <= 0 or self.entry_spot <= 0:
+            return False
+        moved = self.move_since_entry_pct
+        required = self.thesis_move_pct * cfg.manage.thesis_complete_fraction
+        if self.thesis_direction == "up":
+            return moved >= required
+        if self.thesis_direction == "down":
+            return -moved >= required
+        # A vol_only thesis predicts magnitude without a sign; either side counts.
+        return abs(moved) >= required
 
     @property
     def max_profit(self) -> float:
@@ -196,6 +238,21 @@ def evaluate_position(
             Action.CLOSE,
             Barrier.MACRO_RISK,
             f"closing short premium before {macro_window.detail}",
+            pnl,
+            label,
+        )
+
+    # Completion: the underlying has travelled the distance we predicted. The
+    # forecast move has happened, so there is nothing further to wait for —
+    # which is a different question from whether P&L reached its target, and on
+    # a debit position whose implied volatility collapsed the two can disagree.
+    if cfg.manage.exit_on_thesis_complete and view.thesis_move_achieved(cfg):
+        travelled = view.move_since_entry_pct
+        return ManageDecision(
+            Action.CLOSE,
+            Barrier.THESIS_COMPLETE,
+            f"predicted {view.thesis_move_pct:.2f}%, underlying moved "
+            f"{travelled:.2f}% — the forecast move has happened",
             pnl,
             label,
         )

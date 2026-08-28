@@ -251,3 +251,67 @@ def test_macro_exit_outranks_stop_and_target():
     )
     assert winner.barrier is Barrier.MACRO_RISK
     assert loser.barrier is Barrier.MACRO_RISK
+
+
+# --- thesis completion ----------------------------------------------------
+
+
+def thesis_view(direction="up", predicted=5.0, entry_spot=100.0, spot=100.0, **kw):
+    base = {
+        "position_id": "pos-t",
+        "kind": StructureKind.CALL_DEBIT_SPREAD,
+        "qty": 1,
+        "entry_price": 2.00,
+        "current_price": 2.10,
+        "max_loss_per_spread": 200.0,
+        "opened_at": OPENED,
+        "horizon_hours": 24.0,
+        "hours_to_expiry": 168.0,
+        "thesis_direction": direction,
+        "thesis_move_pct": predicted,
+        "entry_spot": entry_spot,
+        "current_spot": spot,
+    }
+    base.update(kw)
+    return PositionView(**base)
+
+
+def test_thesis_completes_when_the_move_arrives():
+    """We predicted +5% and the stock did +5%. The forecast move has happened —
+    there is nothing further to wait for."""
+    d = evaluate_position(thesis_view(spot=105.0), CFG, LATER)
+    assert d.should_close and d.barrier is Barrier.THESIS_COMPLETE
+    assert "the forecast move has happened" in d.reason
+
+
+def test_partial_move_does_not_complete_the_thesis():
+    assert evaluate_position(thesis_view(spot=102.0), CFG, LATER).action is Action.HOLD
+
+
+def test_move_in_the_wrong_direction_does_not_complete_it():
+    """A stock that travelled the predicted distance the wrong way has not
+    completed the thesis, it has falsified it — that is the stop's job."""
+    d = evaluate_position(thesis_view(direction="up", spot=95.0), CFG, LATER)
+    assert d.barrier is not Barrier.THESIS_COMPLETE
+
+
+def test_downward_thesis_completes_on_a_fall():
+    d = evaluate_position(thesis_view(direction="down", spot=95.0), CFG, LATER)
+    assert d.barrier is Barrier.THESIS_COMPLETE
+
+
+def test_vol_only_thesis_completes_on_either_side():
+    """A vol_only view predicts magnitude without a sign."""
+    for spot in (105.0, 95.0):
+        d = evaluate_position(thesis_view(direction="vol_only", spot=spot), CFG, LATER)
+        assert d.barrier is Barrier.THESIS_COMPLETE
+
+
+def test_missing_spot_cannot_evaluate_completion():
+    """Unavailable spot means "cannot evaluate", never "no movement"."""
+    assert evaluate_position(thesis_view(spot=0.0), CFG, LATER).action is Action.HOLD
+
+
+def test_obligations_still_outrank_completion():
+    complete = thesis_view(spot=105.0)
+    assert evaluate_position(complete, CFG, LATER, deadline=OPENED).barrier is Barrier.DEADLINE

@@ -58,6 +58,19 @@ manage:
   debit_stop_pct: 50
   breakeven_trigger_pct: 60      # tighten stop to entry at 60% of target
   min_hours_to_expiry: 24
+  # An entry thesis should have an expiry condition, not only an expiry date.
+  # Contradiction: later news on a held symbol that reverses the view we opened
+  # on. The bar is deliberately higher than the entry bar — an unrelated story
+  # reading mildly bearish must not churn a position, so only a confident and
+  # material reversal counts.
+  exit_on_contradiction: true
+  contradiction_min_confidence: 0.70
+  contradiction_min_materiality: 0.60
+  # Completion: the underlying has travelled the distance we predicted. The move
+  # we forecast has happened, so there is nothing left to wait for — which is a
+  # different question from whether P&L reached its target.
+  exit_on_thesis_complete: true
+  thesis_complete_fraction: 1.0
   flatten_all_at: "2026-09-03T15:55:00-04:00"   # Thu before close, ET
 
 signal:

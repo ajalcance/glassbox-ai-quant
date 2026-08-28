@@ -37,8 +37,11 @@ CREATE TABLE IF NOT EXISTS positions (
     max_loss      REAL NOT NULL,
     status        TEXT NOT NULL,        -- opening | open | closing | closed
     horizon_hours REAL,
-    regime        TEXT,
-    features_json TEXT,
+    regime            TEXT,
+    features_json     TEXT,
+    thesis_direction  TEXT,
+    thesis_move_pct   REAL,
+    entry_spot        REAL,
     peak_pnl      REAL NOT NULL DEFAULT 0,
     exit_barrier  TEXT,
     meta_label    INTEGER,
@@ -117,6 +120,9 @@ class Store:
                 "horizon_hours": "REAL",
                 "regime": "TEXT",
                 "features_json": "TEXT",
+                "thesis_direction": "TEXT",
+                "thesis_move_pct": "REAL",
+                "entry_spot": "REAL",
                 "peak_pnl": "REAL NOT NULL DEFAULT 0",
                 "exit_barrier": "TEXT",
                 "meta_label": "INTEGER",
@@ -298,6 +304,11 @@ class Store:
             (f"{day_prefix}%",),
         ).fetchone()
         return int(row["n"])
+
+    def open_positions_for(self, underlying: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM positions WHERE underlying=? AND status='open'", (underlying,)
+        ).fetchall()
 
     def open_positions(self) -> list[sqlite3.Row]:
         cur = self._conn.execute(

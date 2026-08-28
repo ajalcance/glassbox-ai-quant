@@ -61,6 +61,11 @@ class ManageCfg(BaseModel):
     debit_stop_pct: float
     breakeven_trigger_pct: float
     min_hours_to_expiry: int
+    exit_on_contradiction: bool
+    contradiction_min_confidence: float
+    contradiction_min_materiality: float
+    exit_on_thesis_complete: bool
+    thesis_complete_fraction: float
     flatten_all_at: str
 
 

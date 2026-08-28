@@ -5,6 +5,7 @@ the whole path — filter, analyst, market data, edge test, chain, sizing, gate,
 execution — without touching the network.
 """
 
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -667,3 +668,147 @@ def test_losing_day_shrinks_new_positions(store, audit):
     t.process_news(news(), market(daily_pnl_pct=-1.8))
     ml = [r for r in _audit_records(audit) if r["kind"] == "ml"]
     assert ml and "drawdown" in ml[-1]["context_detail"]
+
+
+# --- contradiction exit ---------------------------------------------------
+
+
+def _open_thesis_position(store, direction="up", symbol="AAPL"):
+    store.upsert_position(
+        f"pos-{symbol}",
+        underlying=symbol,
+        kind="call_debit_spread",
+        legs_json=json.dumps(
+            [
+                {
+                    "symbol": "AAPL260918C00230000",
+                    "right": "call",
+                    "strike": 230.0,
+                    "expiry": "2026-09-18",
+                    "side": "long",
+                    "ratio_qty": 1,
+                },
+                {
+                    "symbol": "AAPL260918C00240000",
+                    "right": "call",
+                    "strike": 240.0,
+                    "expiry": "2026-09-18",
+                    "side": "short",
+                    "ratio_qty": 1,
+                },
+            ]
+        ),
+        qty=1,
+        entry_price=2.0,
+        max_loss=200.0,
+        status="open",
+        horizon_hours=48.0,
+        opened_at=NOW.isoformat(),
+        thesis_direction=direction,
+        thesis_move_pct=5.0,
+        entry_spot=230.0,
+    )
+
+
+def bearish(confidence=0.85, materiality=0.8):
+    return AnalystView(
+        event_type="legal",
+        direction="down",
+        confidence=confidence,
+        expected_move_pct=4.0,
+        horizon_hours=24.0,
+        materiality=materiality,
+        rationale="reverses the earlier story",
+    )
+
+
+def test_contradicting_news_closes_the_position(store, audit):
+    """We bought on 'raises guidance'. Ninety minutes later the guidance is
+    retracted. The thesis is dead and the position should not wait for a stop."""
+    router = StubRouter()
+    t = make_trader(store, audit, router=router)
+    _open_thesis_position(store, direction="up")
+
+    closed = t.check_contradiction("AAPL", bearish())
+    assert closed == ["pos-AAPL"]
+    assert store.open_positions() == []
+    assert router.submitted and router.submitted[-1]["closing"] is True
+    rows = store.training_rows()
+    assert rows and rows[0]["exit_barrier"] == "thesis_broken"
+
+
+def test_agreeing_news_does_not_close(store, audit):
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="up")
+    bullish = AnalystView(
+        event_type="earnings",
+        direction="up",
+        confidence=0.9,
+        expected_move_pct=4.0,
+        horizon_hours=24.0,
+        materiality=0.9,
+        rationale="x",
+    )
+    assert t.check_contradiction("AAPL", bullish) == []
+    assert store.open_positions()
+
+
+def test_low_confidence_reversal_is_ignored(store, audit):
+    """The bar is higher than the entry bar: a mildly bearish unrelated story
+    must not churn a position."""
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="up")
+    assert t.check_contradiction("AAPL", bearish(confidence=0.62)) == []
+    assert store.open_positions()
+
+
+def test_immaterial_reversal_is_ignored(store, audit):
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="up")
+    assert t.check_contradiction("AAPL", bearish(materiality=0.3)) == []
+    assert store.open_positions()
+
+
+def test_vol_only_thesis_cannot_be_contradicted_by_direction(store, audit):
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="vol_only")
+    assert t.check_contradiction("AAPL", bearish()) == []
+    assert store.open_positions()
+
+
+def test_contradiction_only_touches_the_named_symbol(store, audit):
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="up", symbol="AAPL")
+    _open_thesis_position(store, direction="up", symbol="MSFT")
+    assert t.check_contradiction("AAPL", bearish()) == ["pos-AAPL"]
+    assert {r["underlying"] for r in store.open_positions()} == {"MSFT"}
+
+
+def test_contradiction_runs_from_the_entry_pipeline(store, audit):
+    """One analyst call, two consumers — the entry path already produced the
+    view, so the check costs nothing extra.
+
+    The reversed position is closed and the same story may then open a fresh one
+    in the new direction, which is the correct outcome: the news both invalidates
+    the old thesis and constitutes a new one.
+    """
+    t = make_trader(store, audit)
+    _open_thesis_position(store, direction="down")
+    t.process_news(news(), market())  # stub analyst is bullish, confidence 0.85
+
+    closed = store.training_rows()
+    assert [r["exit_barrier"] for r in closed] == ["thesis_broken"]
+    assert all(r["position_id"] != "pos-AAPL" for r in store.open_positions()), (
+        "the reversed position must not still be open"
+    )
+
+
+def test_position_records_its_thesis(store, audit):
+    """The completion and contradiction checks both need it."""
+    t = make_trader(store, audit)
+    outcome = t.process_news(news(), market())
+    assert outcome.traded
+    row = store.open_positions()[0]
+    assert row["thesis_direction"] == "up"
+    assert float(row["thesis_move_pct"]) == pytest.approx(4.0)
+    assert float(row["entry_spot"]) == pytest.approx(SPOT)
