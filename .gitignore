@@ -34,3 +34,4 @@ KILL
 # Local tooling
 .claude/settings.local.json
 .DS_Store
+local/

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -39,6 +40,10 @@ class AuditLog:
         self.role = role
         self._prev_hash: str | None = None  # lazily initialised from today's file
         self._path: Path | None = None
+        # Per-role files make concurrent *processes* safe; this makes concurrent
+        # *threads* of one process safe (the trader's stream thread and main
+        # loop share one AuditLog and would otherwise race the cached hash).
+        self._lock = threading.Lock()
 
     def path_for(self, ts: datetime) -> Path:
         """This process's own file for the given UTC timestamp's day."""
@@ -54,25 +59,26 @@ class AuditLog:
 
     def append(self, kind: str, payload: dict) -> dict:
         """Append one record and return it (including its record_id)."""
-        ts = datetime.now(UTC)
-        path = self.path_for(ts)
-        if self._prev_hash is None or path != self._path:
-            # First write, or the UTC day rolled over: each day-file is its own
-            # chain, so the cached hash from yesterday's file must not leak in.
-            self._prev_hash = self._last_hash(path)
-            self._path = path
-        record = {
-            "record_id": uuid.uuid4().hex,
-            "ts": ts.isoformat(),
-            "prev_hash": self._prev_hash,
-            "kind": kind,
-            **payload,
-        }
-        line = _canonical(record)
-        with open(path, "ab") as f:
-            f.write(line + b"\n")
-        self._prev_hash = hashlib.sha256(line).hexdigest()
-        return record
+        with self._lock:
+            ts = datetime.now(UTC)
+            path = self.path_for(ts)
+            if self._prev_hash is None or path != self._path:
+                # First write, or the UTC day rolled over: each day-file is its
+                # own chain, so the hash cached from yesterday must not leak in.
+                self._prev_hash = self._last_hash(path)
+                self._path = path
+            record = {
+                "record_id": uuid.uuid4().hex,
+                "ts": ts.isoformat(),
+                "prev_hash": self._prev_hash,
+                "kind": kind,
+                **payload,
+            }
+            line = _canonical(record)
+            with open(path, "ab") as f:
+                f.write(line + b"\n")
+            self._prev_hash = hashlib.sha256(line).hexdigest()
+            return record
 
     @staticmethod
     def verify_chain(path: str | Path) -> tuple[bool, int]:

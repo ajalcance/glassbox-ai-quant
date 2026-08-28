@@ -90,6 +90,28 @@ def test_verify_day_flags_only_the_broken_role(tmp_path):
     assert broken == [path.name]
 
 
+def test_threads_of_one_process_share_one_valid_chain(tmp_path):
+    """The trader's stream thread and main loop share one AuditLog; concurrent
+    appends must serialise into a single valid chain, not race the cached hash."""
+    import threading
+
+    log = AuditLog(tmp_path, role="trader")
+    barrier = threading.Barrier(6)
+
+    def hammer(n):
+        barrier.wait()
+        for i in range(30):
+            log.append("tick", {"thread": n, "i": i})
+
+    threads = [threading.Thread(target=hammer, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    ok, n = AuditLog.verify_chain(_day_file(log))
+    assert ok and n == 180
+
+
 def test_role_must_be_filename_safe(tmp_path):
     with pytest.raises(ValueError):
         AuditLog(tmp_path, role="../evil")

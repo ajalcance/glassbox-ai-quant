@@ -76,6 +76,33 @@ def test_pipeline_error_is_logged_and_swallowed(tmp_path, capsys):
     assert any("pipeline_error" in k for k in kinds)
 
 
+def test_store_is_usable_from_the_stream_thread(tmp_path):
+    """The news socket delivers on its own thread but shares the Runner's Store.
+    A connection bound to the main thread would make every socket story fail at
+    its first store access — and, once marked seen, be skipped by the poller."""
+    import threading
+
+    from glassbox.store import Store
+
+    store = Store(tmp_path / "s.db")
+    store.set_state("main", "1")
+    errors = []
+
+    def stream_thread():
+        try:
+            store.set_state("stream", "2")
+            assert store.get_state("main") == "1"
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=stream_thread)
+    t.start()
+    t.join()
+    assert not errors, errors
+    assert store.get_state("stream") == "2"
+    store.close()
+
+
 def test_duplicate_news_processed_once(tmp_path):
     """The socket and the poller both see the same story."""
     from glassbox.runner import Runner

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -98,15 +99,30 @@ def _now() -> str:
 
 
 class Store:
+    """One connection per thread. The trader's news-stream thread and its main
+    loop share a single Store instance, and sqlite3 connections refuse use from
+    a thread other than their creator — a shared connection would make every
+    socket-delivered story fail at its first store access. WAL mode makes the
+    per-thread connections safe against each other."""
+
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, isolation_level=None)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._local = threading.local()
         self._conn.executescript(SCHEMA)
         self._migrate()
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return conn
 
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created.
@@ -135,7 +151,12 @@ class Store:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def close(self) -> None:
-        self._conn.close()
+        """Close the calling thread's connection. Other threads' connections
+        (the trader's daemon stream thread) end with the process."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
