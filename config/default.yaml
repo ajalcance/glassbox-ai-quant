@@ -53,6 +53,12 @@ llm:
   analyst_max_tokens: 600
   timeout_seconds: 20
 
+dashboard:
+  # 8847: deliberately clear of 3000/5000/8000/8080/5173 and other common
+  # dev-server defaults so it never collides with another local project.
+  port: 8847
+  host: "127.0.0.1"
+
 paths:
   db: "data/glassbox.db"
   audit_dir: "audit"

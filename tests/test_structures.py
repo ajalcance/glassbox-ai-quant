@@ -94,3 +94,34 @@ def test_structure_key_is_stable_and_order_independent(bull_put):
     )
     assert structure_key(bull_put) == structure_key(reversed_legs)
     assert re.match(r"SPY\|bull_put_spread\|20260918\|", structure_key(bull_put))
+
+
+def test_credit_at_or_above_width_rejected(bull_put):
+    """A credit >= width implies risk-free arbitrage. Accepting it would compute
+    max_loss = 0, making the heat check pass trivially and sizing unbounded."""
+    from glassbox.structures import ImplausiblePricingError
+
+    with pytest.raises(ImplausiblePricingError, match="risk-free arbitrage"):
+        max_loss_per_spread(bull_put, net_price=-5.00)  # width is exactly 5
+    with pytest.raises(ImplausiblePricingError):
+        max_loss_per_spread(bull_put, net_price=-7.50)
+
+
+def test_free_debit_rejected():
+    from glassbox.structures import ImplausiblePricingError
+
+    debit = Structure(
+        kind=StructureKind.CALL_DEBIT_SPREAD,
+        underlying="SPY",
+        legs=(
+            leg("SPY260918C00450000", Right.CALL, 450, LegSide.LONG),
+            leg("SPY260918C00455000", Right.CALL, 455, LegSide.SHORT),
+        ),
+    )
+    with pytest.raises(ImplausiblePricingError, match="free long position"):
+        max_loss_per_spread(debit, net_price=0.0)
+
+
+def test_max_loss_is_always_positive_for_valid_pricing(bull_put):
+    for credit in (0.10, 1.20, 4.99):
+        assert max_loss_per_spread(bull_put, net_price=-credit) > 0

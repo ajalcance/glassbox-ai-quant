@@ -25,8 +25,7 @@ def leg(symbol, right, strike, side, qty=1):
     return Leg(symbol=symbol, right=right, strike=strike, expiry=EXP, side=side, ratio_qty=qty)
 
 
-@pytest.fixture
-def bull_put():
+def make_bull_put() -> Structure:
     """Credit spread: short 440 put covered by long 435 put. Width 5."""
     return Structure(
         kind=StructureKind.BULL_PUT_SPREAD,
@@ -38,11 +37,20 @@ def bull_put():
     )
 
 
-@pytest.fixture
-def naked_put():
+def make_naked_put() -> Structure:
     """Uncovered short put — must never be tradable."""
     return Structure(
         kind=StructureKind.BULL_PUT_SPREAD,
         underlying="SPY",
         legs=(leg("SPY260918P00440000", Right.PUT, 440, LegSide.SHORT),),
     )
+
+
+@pytest.fixture
+def bull_put():
+    return make_bull_put()
+
+
+@pytest.fixture
+def naked_put():
+    return make_naked_put()

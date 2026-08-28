@@ -44,6 +44,16 @@ class UndefinedRiskError(Exception):
     """Raised when a structure contains an uncovered short leg. Never suppress."""
 
 
+class ImplausiblePricingError(Exception):
+    """Raised when a quoted price implies an impossible payoff.
+
+    A credit at or above the spread width would be risk-free arbitrage, and a
+    non-positive debit is free optionality — neither exists. Both mean the
+    pricing input is wrong, and both would compute a max loss of zero, which
+    downstream makes the heat check pass trivially and sizing unbounded.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class Leg:
     symbol: str  # OCC option symbol
@@ -108,19 +118,30 @@ def max_loss_per_spread(structure: Structure, net_price: float) -> float:
     assert_defined_risk(structure)
 
     if not structure.is_credit:
+        debit = abs(net_price)
+        if debit <= 0:
+            raise ImplausiblePricingError(
+                f"{structure.kind}: debit of {debit} — a free long position does not exist"
+            )
         # Debit structures: the most you can lose is what you paid.
-        return abs(net_price) * 100
+        return debit * 100
 
     credit = abs(net_price)
     widths = []
     for right in (Right.CALL, Right.PUT):
-        strikes = [l.strike for l in structure.legs if l.right is right]
+        strikes = [leg.strike for leg in structure.legs if leg.right is right]
         if len(strikes) >= 2:
             widths.append(max(strikes) - min(strikes))
     if not widths:
         raise UndefinedRiskError(f"{structure.kind}: credit structure with no spread width")
     # An iron condor can only be breached on one side, so the widest wing governs.
-    return (max(widths) - credit) * 100
+    width = max(widths)
+    if credit >= width:
+        raise ImplausiblePricingError(
+            f"{structure.kind}: credit {credit:.2f} >= width {width:.2f} — implies risk-free "
+            f"arbitrage. Check the quote; a zero max-loss would make risk checks meaningless."
+        )
+    return (width - credit) * 100
 
 
 def structure_key(structure: Structure) -> str:

@@ -39,3 +39,9 @@ def test_supervisor_falls_back_to_main_credentials(monkeypatch):
 
     sup, trader = supervisor_trading_client(), trading_client()
     assert sup is not trader, "supervisor must hold its own client instance"
+
+
+def test_dashboard_port_avoids_common_dev_ports():
+    load_config.cache_clear()
+    port = load_config().dashboard.port
+    assert port not in {3000, 4200, 5000, 5173, 8000, 8080, 8888, 9000}

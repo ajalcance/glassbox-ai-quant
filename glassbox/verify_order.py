@@ -46,9 +46,16 @@ def build_far_otm_put_spread(client) -> Structure:
     if not contracts:
         raise RuntimeError("no SPY put contracts returned")
 
+    # Filter expiries client-side: the server-side bound is not reliable and we
+    # must never pick a contract expiring inside our minimum-time-to-expiry.
+    floor = market_date() + timedelta(days=7)
     by_expiry: dict[date, list] = {}
     for c in contracts:
-        by_expiry.setdefault(parse_expiry(c.expiration_date), []).append(c)
+        exp = parse_expiry(c.expiration_date)
+        if exp >= floor:
+            by_expiry.setdefault(exp, []).append(c)
+    if not by_expiry:
+        raise RuntimeError(f"no SPY put expiries on or after {floor}")
     expiry = min(by_expiry)
     strikes = sorted(by_expiry[expiry], key=lambda c: float(c.strike_price))
 
@@ -85,8 +92,9 @@ def main() -> int:
     key = structure_key(structure)
     print(f"structure: {key}")
 
-    # Price it as a credit far above anything achievable so it rests unfilled.
-    limit_price = -5.00
+    # Price it as a credit far above anything achievable so it rests unfilled,
+    # but still below the spread width so max-loss stays plausible.
+    limit_price = -4.50  # below the 5-wide width, far above any real bid -> rests unfilled
     risk = max_loss_per_spread(structure, limit_price)
     print(f"defined-risk check passed; max loss/spread would be ${risk:.2f}")
 

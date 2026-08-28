@@ -77,6 +77,11 @@ class LlmCfg(BaseModel):
     timeout_seconds: int
 
 
+class DashboardCfg(BaseModel):
+    port: int
+    host: str
+
+
 class PathsCfg(BaseModel):
     db: str
     audit_dir: str
@@ -92,6 +97,7 @@ class Config(BaseModel):
     signal: SignalCfg
     universe: UniverseCfg
     llm: LlmCfg
+    dashboard: DashboardCfg
     paths: PathsCfg
 
 
