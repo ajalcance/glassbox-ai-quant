@@ -36,3 +36,7 @@ KILL
 .claude/settings.local.json
 .DS_Store
 local/
+
+# Soak output — the harnesses in soak/ are committed, their results are not
+soak-results/
+soak/soak-results/
