@@ -26,7 +26,10 @@ services:
     container_name: glassbox-trader
     # Start in dry-run. Going live is a deliberate act, not a default:
     # set TRADER_MODE= (empty) in .env once you have watched a session.
-    command: python -m glassbox.runner ${TRADER_MODE:---dry-run}
+    # NOTE: single-dash substitution on purpose. ${VAR:-default} treats an
+    # EMPTY variable as unset, so "TRADER_MODE= means live" would silently
+    # keep dry-running; ${VAR-default} defaults only when truly unset.
+    command: python -m glassbox.runner ${TRADER_MODE---dry-run}
     stop_grace_period: 30s
 
   supervisor:
