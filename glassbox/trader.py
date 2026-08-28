@@ -105,6 +105,13 @@ class Trader:
         if is_halted(self.store):
             return self._drop("halt", item, "system halted")
 
+        # 0. If we could not act on this even with a perfect signal, do not pay
+        # a model to read it. The gate would veto a closed market anyway, and
+        # news arrives around the clock — without this the system would spend
+        # every night analysing stories it can never trade.
+        if not market.is_open:
+            return self._drop("market_closed", item, "market closed")
+
         # 1. deterministic filter — kills most of the stream at no model cost
         verdict = self.filter.evaluate(item, now=self.clock())
         if not verdict.passed:

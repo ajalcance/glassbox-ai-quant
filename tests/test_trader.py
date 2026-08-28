@@ -350,3 +350,23 @@ def test_structure_selection_is_overridable(store, audit):
         clock=lambda: NOW,
     )
     assert t.select_structure([StructureKind.IRON_CONDOR]) is StructureKind.IRON_CONDOR
+
+
+def test_closed_market_skips_the_model_entirely(store, audit):
+    """News arrives around the clock. Without an early exit the system would
+    spend every night paying a model to read stories it cannot trade."""
+
+    class CountingLlm(StubLlm):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def extract(self, **kwargs):
+            self.calls += 1
+            return super().extract(**kwargs)
+
+    llm = CountingLlm()
+    t = make_trader(store, audit, llm=llm)
+    out = t.process_news(news(), market(is_open=False))
+    assert not out.traded and out.stage == "market_closed"
+    assert llm.calls == 0, "analyst was called on news we could not act on"
