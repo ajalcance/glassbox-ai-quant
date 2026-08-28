@@ -15,11 +15,11 @@ venv/
 *.egg-info/
 
 # Data & runtime state (regenerated; audit logs stay local)
-data/
+/data/
 *.db
 *.sqlite3
-logs/
-audit/
+/logs/
+/audit/
 models/*.bin
 models/*.txt
 models/*.pkl
