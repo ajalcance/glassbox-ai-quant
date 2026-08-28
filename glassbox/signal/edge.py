@@ -12,7 +12,6 @@ whether we want to be long or short optionality — or, most often, neither.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -28,43 +27,18 @@ class EdgeVerdict(StrEnum):
 @dataclass(frozen=True, slots=True)
 class EdgeResult:
     verdict: EdgeVerdict
-    expected_move_pct: float
+    expected_move_pct: float  # after discounting what already moved
     implied_move_pct: float
     ratio: float
     eligible_structures: tuple[StructureKind, ...]
     detail: str
+    raw_expected_move_pct: float = 0.0  # the analyst's estimate before discount
+    realized_move_pct: float = 0.0  # already spent since the story broke
+    vrp_ratio: float | None = None  # implied / forecast realized
 
     @property
     def tradable(self) -> bool:
         return self.verdict is not EdgeVerdict.NO_EDGE
-
-
-def implied_move_pct(
-    straddle_mid: float,
-    spot: float,
-    hours_to_expiry: float,
-    horizon_hours: float,
-    min_horizon_hours: float = 6.5,
-) -> float:
-    """Market-implied absolute move over `horizon_hours`, as a percentage.
-
-    The straddle prices the move to expiry and volatility scales with the square
-    root of time, so a shorter horizon implies a smaller move.
-
-    That scaling assumes *diffusion* — volatility accumulating smoothly — so it
-    is only valid for comparing quiet periods of different lengths. It is the
-    wrong model for an event, and `evaluate_edge` does not use it: see
-    `event_implied_move_pct`.
-    """
-    if spot <= 0 or straddle_mid <= 0:
-        raise ValueError(f"invalid quote: straddle={straddle_mid}, spot={spot}")
-    if hours_to_expiry <= 0:
-        raise ValueError("hours_to_expiry must be positive")
-
-    effective_horizon = max(horizon_hours, min_horizon_hours)
-    move_to_expiry = 100 * straddle_mid / spot
-    scale = math.sqrt(min(effective_horizon, hours_to_expiry) / hours_to_expiry)
-    return move_to_expiry * scale
 
 
 def event_implied_move_pct(straddle_mid: float, spot: float) -> float:
@@ -111,6 +85,45 @@ def eligible_structures(verdict: EdgeVerdict, direction: str) -> tuple[Structure
     return ()
 
 
+def remaining_move(expected_pct: float, realized_pct: float | None) -> float:
+    """Expected move less whatever the market has already made.
+
+    An "expected 5% vs implied 3%" signal on a name that has already run 5% is
+    really "0% remaining vs 3%" — the same headline, the opposite conclusion.
+    An unmeasurable reaction discounts nothing rather than assuming none.
+    """
+    if realized_pct is None:
+        return expected_pct
+    return max(0.0, expected_pct - realized_pct)
+
+
+def vrp_permits(verdict: EdgeVerdict, vrp_ratio: float | None, cfg) -> tuple[bool, str]:
+    """Does the volatility risk premium agree with the direction we chose?
+
+    The expected-vs-implied test says the market has mispriced *this event*.
+    This asks a different question: are these options expensive relative to what
+    the underlying actually delivers? Buying rich optionality is the expensive
+    mistake, so the ceiling on debits is the tighter of the two bounds.
+
+    An unavailable forecast permits the trade — the volatility model is a second
+    opinion, not a precondition.
+    """
+    if vrp_ratio is None:
+        return True, "no volatility forecast"
+    if verdict is EdgeVerdict.LONG_CONVEXITY and vrp_ratio > cfg.signal.vrp_max_for_debit:
+        return False, (
+            f"VRP {vrp_ratio:.2f} > {cfg.signal.vrp_max_for_debit} — options already "
+            f"price more movement than this name delivers; buying them is the "
+            f"expensive side"
+        )
+    if verdict is EdgeVerdict.SHORT_PREMIUM and vrp_ratio < cfg.signal.vrp_min_for_credit:
+        return False, (
+            f"VRP {vrp_ratio:.2f} < {cfg.signal.vrp_min_for_credit} — premium is thin "
+            f"relative to realised movement; not paid enough to be short"
+        )
+    return True, f"VRP {vrp_ratio:.2f} agrees"
+
+
 def evaluate_edge(
     expected_move_pct: float,
     direction: str,
@@ -120,6 +133,8 @@ def evaluate_edge(
     hours_to_expiry: float,
     horizon_hours: float,
     cfg,
+    realized_move_pct: float | None = None,
+    forecast_move_pct: float | None = None,
 ) -> EdgeResult:
     """Compare the analyst's expected move against what the options imply.
 
@@ -130,26 +145,41 @@ def evaluate_edge(
     # The expiry we trade always spans the event, so the straddle is compared
     # directly rather than discounted to the analyst's horizon.
     implied = event_implied_move_pct(straddle_mid, spot)
+    raw_expected = expected_move_pct
+    consumed = realized_move_pct if cfg.signal.consume_realized_move else None
+    expected_move_pct = remaining_move(raw_expected, consumed)
+    vrp = (implied / forecast_move_pct) if forecast_move_pct else None
 
-    if confidence < cfg.signal.min_confidence:
+    def result(verdict, ratio, detail, structures=()):
         return EdgeResult(
-            EdgeVerdict.NO_EDGE,
+            verdict,
             expected_move_pct,
             implied,
+            ratio,
+            structures,
+            detail,
+            raw_expected_move_pct=raw_expected,
+            realized_move_pct=consumed or 0.0,
+            vrp_ratio=vrp,
+        )
+
+    if confidence < cfg.signal.min_confidence:
+        return result(
+            EdgeVerdict.NO_EDGE,
             0.0,
-            (),
             f"confidence {confidence:.2f} < {cfg.signal.min_confidence}",
         )
 
-    if implied <= 0:
-        return EdgeResult(
+    if consumed and expected_move_pct <= 0:
+        return result(
             EdgeVerdict.NO_EDGE,
-            expected_move_pct,
-            implied,
             0.0,
-            (),
-            "implied move is zero — unusable quote",
+            f"expected {raw_expected:.2f}% already moved {consumed:.2f}% — "
+            f"nothing left of the thesis",
         )
+
+    if implied <= 0:
+        return result(EdgeVerdict.NO_EDGE, 0.0, "implied move is zero — unusable quote")
 
     ratio = expected_move_pct / implied
 
@@ -157,12 +187,9 @@ def evaluate_edge(
         # Options markets are not this wrong. A ratio this extreme means a bad
         # quote, a stale spot, or an analyst estimate detached from reality —
         # the same reasoning that rejects a credit above the spread width.
-        return EdgeResult(
+        return result(
             EdgeVerdict.NO_EDGE,
-            expected_move_pct,
-            implied,
             ratio,
-            (),
             f"ratio {ratio:.1f} exceeds plausible {cfg.signal.max_plausible_ratio} — "
             f"treating as bad data, not opportunity",
         )
@@ -180,17 +207,19 @@ def evaluate_edge(
             f"(ratio {ratio:.2f}) — options overpricing this move"
         )
     else:
-        verdict = EdgeVerdict.NO_EDGE
-        detail = (
+        return result(
+            EdgeVerdict.NO_EDGE,
+            ratio,
             f"expected {expected_move_pct:.2f}% vs implied {implied:.2f}% "
-            f"(ratio {ratio:.2f}) — fairly priced, no edge"
+            f"(ratio {ratio:.2f}) — fairly priced, no edge",
         )
 
-    return EdgeResult(
-        verdict,
-        expected_move_pct,
-        implied,
-        ratio,
-        eligible_structures(verdict, direction),
-        detail,
+    permitted, vrp_detail = vrp_permits(verdict, vrp, cfg)
+    if not permitted:
+        return result(EdgeVerdict.NO_EDGE, ratio, vrp_detail)
+
+    if consumed:
+        detail += f"; {consumed:.2f}% of {raw_expected:.2f}% already moved"
+    return result(
+        verdict, ratio, f"{detail}; {vrp_detail}", eligible_structures(verdict, direction)
     )

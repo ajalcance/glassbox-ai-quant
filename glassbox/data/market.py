@@ -55,7 +55,15 @@ class MarketData:
     root: object  # repo root, for the kill-switch file
     quote_ttl: float = 20.0  # seconds
     bar_ttl: float = 3600.0
+    models_dir: object = None
     _cache: dict = field(default_factory=dict)
+    _harrv: object = None
+
+    def __post_init__(self):
+        from pathlib import Path
+
+        if self.models_dir is None:
+            self.models_dir = Path(__file__).resolve().parents[2] / "models"
 
     # -- caching ----------------------------------------------------------
     def _cached(self, key, ttl: float, produce):
@@ -333,6 +341,63 @@ class MarketData:
                     * spot
                 )
         return total
+
+    def move_since(self, symbol: str, since) -> float | None:
+        """Absolute percentage move in the underlying since a point in time.
+
+        Used to discount an expected move by however much of it the market has
+        already made. Direction is deliberately ignored: a stock that moved
+        hard *against* the analyst's thesis has not left the move available — it
+        has produced evidence the thesis is wrong. Either way the opportunity is
+        smaller than the raw estimate suggests.
+
+        Returns None when it cannot be measured, which the caller treats as "no
+        adjustment" rather than "no move".
+        """
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+
+        try:
+            bars = self.stock_client.get_stock_bars(
+                StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, start=since)
+            ).data.get(symbol, [])
+        except Exception:  # noqa: BLE001 -- unmeasurable is not zero
+            return None
+        if not bars:
+            return None
+
+        reference = float(bars[0].open)
+        if reference <= 0:
+            return None
+        try:
+            now = self.spot(symbol)
+        except ValueError:
+            return None
+        return abs(now - reference) / reference * 100
+
+    def forecast_move_pct(self, symbol: str, hours_to_expiry: float) -> float | None:
+        """The move the volatility model expects over the option's life.
+
+        Gives the frozen HAR-RV model a second job: not just scaling position
+        size, but answering whether the options are pricing more movement than
+        this underlying historically delivers.
+        """
+        import math
+
+        from glassbox.ml.volforecast import HarRv
+
+        if self._harrv is None:
+            self._harrv = HarRv.load(self.models_dir / "harrv.json")
+        if not self._harrv.is_trained:
+            return None
+        closes = self.daily_closes(symbol, 60)
+        daily = self._harrv.forecast(closes)
+        if not daily or hours_to_expiry <= 0:
+            return None
+        # Daily volatility scales with the square root of time. This *is* a
+        # diffusive quantity, unlike the event jump, so the scaling is correct.
+        days = hours_to_expiry / 24
+        return daily * math.sqrt(max(days, 1.0)) * 100
 
     # -- corporate actions ------------------------------------------------
     def corporate_events(self, symbol: str) -> list:

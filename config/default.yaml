@@ -45,11 +45,21 @@ signal:
   min_confidence: 0.6
   edge_ratio_debit: 1.3          # expected/implied above this -> long convexity
   edge_ratio_credit: 0.7         # expected/implied below this -> short premium
-  # A news event is a jump, not diffusion: it resolves at once rather than
-  # accumulating over the horizon. Scaling implied vol down by sqrt(t) to a few
-  # hours therefore understates what the market is really pricing for the event
-  # and makes every story look mispriced. We never scale below one session.
-  min_horizon_hours: 6.5
+  # How much of the expected move is treated as already spent. News up to two
+  # hours old is accepted, and in that time the market may already have priced
+  # it — an "expected 5% vs implied 3%" signal on a name that has already run 5%
+  # is really "0% remaining vs 3%", which is the wrong side of a good signal.
+  consume_realized_move: true
+  # Below this many minutes since the story broke, no adjustment is made: there
+  # is not enough tape yet to measure a reaction.
+  min_minutes_for_reaction: 2
+  # Volatility risk premium: implied move divided by the move the volatility
+  # model actually forecasts. Above 1 the options are pricing more movement than
+  # the underlying historically delivers, which favours selling premium and
+  # penalises buying it. Buying rich optionality is the expensive mistake, so
+  # the debit ceiling is the tighter of the two.
+  vrp_max_for_debit: 1.35
+  vrp_min_for_credit: 0.90
   # An implausibly large edge is a data problem, not an opportunity - the same
   # reasoning that rejects a credit above the spread width.
   max_plausible_ratio: 5.0

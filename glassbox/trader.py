@@ -169,6 +169,25 @@ class Trader:
 
         hours_to_expiry = self.data.hours_to_expiry(chain)
 
+        # How much of the expected move has the market already made? News up to
+        # two hours old is accepted, and the reaction may be over by the time we
+        # see it.
+        realized = None
+        if self.cfg.signal.consume_realized_move and hasattr(self.data, "move_since"):
+            age_minutes = (self.clock() - item.created_at).total_seconds() / 60
+            if age_minutes >= self.cfg.signal.min_minutes_for_reaction:
+                try:
+                    realized = self.data.move_since(item.symbol, item.created_at)
+                except Exception:  # noqa: BLE001 -- unmeasurable discounts nothing
+                    realized = None
+
+        forecast = None
+        if hasattr(self.data, "forecast_move_pct"):
+            try:
+                forecast = self.data.forecast_move_pct(item.symbol, hours_to_expiry)
+            except Exception:  # noqa: BLE001 -- the vol model is a second opinion
+                forecast = None
+
         # 4. the edge test — is the move bigger or smaller than what is priced?
         edge = evaluate_edge(
             expected_move_pct=view.expected_move_pct,
@@ -179,6 +198,8 @@ class Trader:
             hours_to_expiry=hours_to_expiry,
             horizon_hours=view.horizon_hours,
             cfg=self.cfg,
+            realized_move_pct=realized,
+            forecast_move_pct=forecast,
         )
         self.audit.append(
             "edge_test",
@@ -187,7 +208,11 @@ class Trader:
                 "verdict": str(edge.verdict),
                 "ratio": edge.ratio,
                 "expected_move_pct": edge.expected_move_pct,
+                "raw_expected_move_pct": edge.raw_expected_move_pct,
+                "realized_move_pct": edge.realized_move_pct,
                 "implied_move_pct": edge.implied_move_pct,
+                "forecast_move_pct": forecast,
+                "vrp_ratio": edge.vrp_ratio,
                 "detail": edge.detail,
             },
         )
