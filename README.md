@@ -43,7 +43,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design an
 - **Fireworks AI** — LLM analyst (structured JSON extraction) + nightly report writer
 - **FastAPI + SSE, single self-contained HTML page** — read-only dashboard (the reasoning layer, not a second broker UI)
 - **SQLite (WAL) + append-only JSONL audit log** — storage
-- **Docker Compose on a $12 DigitalOcean droplet** — deployment
+- **Docker Compose on a 2 GB US-East VPS** — deployment (trader, supervisor, scheduler, dashboard, Caddy)
 
 ## Quickstart
 
@@ -72,6 +72,43 @@ Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.
 
 See [docs/MCP_AND_CLI.md](docs/MCP_AND_CLI.md), including a measured caveat about CLI reliability.
 
+### Why the order path uses the official SDK
+
+The hackathon guidelines ask that anyone implementing their bot through an SDK
+explain the reasons and prioritise the official SDKs. GlassBox uses
+**alpaca-py — Alpaca's official Python SDK — for the order path**, with the MCP
+server and CLI integrated alongside it. The reason is the governing invariant:
+
+> **The deterministic risk gate must be the only path to the broker.**
+
+An agent that can call a `place_option_order` tool is one hallucinated tool call
+away from an unbounded position. That is precisely the failure mode this
+architecture exists to prevent, so the LLM is never given a tool that reaches
+the broker — it returns schema-validated JSON estimates and nothing else. Four
+specific guarantees also require programmatic control of the request itself,
+which a conversational tool call cannot provide:
+
+1. **Idempotency** — every order carries a deterministic `client_order_id`
+   derived from (signal, structure, attempt), so a retry after a timeout cannot
+   double-fill. This is verified under 12-thread concurrent duplicate storms.
+2. **Write-ahead intent** — the order is persisted *before* submission, so a
+   crash mid-call still leaves something to reconcile against.
+3. **Atomicity** — spreads go as single MLEG orders; we are never left holding
+   one leg of a defined-risk structure.
+4. **Circuit breaking** — broker failures open a breaker rather than becoming a
+   retry storm.
+
+The MCP server and CLI are genuinely used, just not as the order path:
+
+- **MCP** is the human inspection surface — 72 tools, verified by a real stdio
+  handshake in `verify_mcp`, so a judge or operator can interrogate the same
+  account the agent trades, in plain language. The server *can* place orders;
+  we deliberately decline to use that capability.
+- **CLI** is an independent second source of truth in nightly reconciliation —
+  a different binary with its own auth, sharing no code with the SDK path it
+  checks. A verification path that shares plumbing with the thing it verifies
+  is not verification.
+
 ## The dashboard shows what Alpaca can't
 
 Alpaca's own dashboard already shows equity, positions, P&L and orders, so we
@@ -82,11 +119,84 @@ utilization against our own caps, and the state of the learning components.
 
 *Alpaca shows what happened. GlassBox shows why — and what we deliberately didn't do.*
 
+## Evidence: the guardrails were tested, not asserted
+
+Anyone can claim a kill switch works. These are reproducible drills that fire
+the real code against the real broker, plus the results they produced during
+the pre-contest weekend. Every one is a `make` target in this repository:
+
+| Drill | What it proves |
+|---|---|
+| `make drill-sim` | Full lifecycle against a simulated fill — works market-closed |
+| `make drill-trip` | Opens a **real** spread, verifies the broker agrees, reconciles, force-closes through an elapsed deadline, feeds the learners, re-verifies the audit chain |
+| `make drill-flat` | Opens a position, engages the kill switch, proves the **supervisor** flattens it |
+| `make drill-recon` | Induces a state divergence and proves it HALTs trading (places no orders) |
+| `make drill-clean` | Sweeps all drill residue |
+
+**These drills earn their keep.** `drill-flat` failed on its first live run
+90 minutes before go-live and exposed a real bug in the last-resort safety
+path: `close_all_positions` closes a spread's legs as independent positions in
+arbitrary order, and selling the long leg while its short leg still existed was
+rejected as a would-be naked short — so one pass closed the short leg and left
+the long leg on the book, at exactly the moment the guards had decided
+everything must go. Flatten now verifies the book is empty, retries, and writes
+a loud `flatten_incomplete` audit record if it still cannot finish. Re-run
+against the live broker: passed.
+
+Beyond the drills, the agent was soaked under conditions the market cannot be
+relied upon to produce:
+
+- **Concurrency** — 12-thread duplicate-news storms through the real pipeline;
+  the idempotent `client_order_id` survived every check-then-act race with
+  exactly one order reaching the broker each time.
+- **Crash recovery** — `SIGKILL` at three points around order submission; state
+  rebuilt from the store plus broker, idempotent retry converged on one order.
+- **Infrastructure chaos** — every container killed at host level (all revived
+  by restart policy), Docker daemon restarted, and a **full host reboot**: the
+  entire stack, monitor included, returned unattended with audit chains intact.
+- **Network partition** — all outbound HTTPS dropped for three minutes. The
+  supervisor kept evaluating guards throughout and recovered cleanly, which is
+  only true because every broker call carries an explicit timeout; `alpaca-py`
+  sets none, and an unbounded call would silently freeze the one process that
+  can least afford to hang.
+
+The audit log is hash-chained per writing process, and `verify_day` re-verified
+every chain after each of those scenarios.
+
 ## What this deliberately does NOT include (and why)
 
 - **No backtester** — the LLM's training data overlaps any historical window, so a backtest would inherit look-ahead bias baked into model weights. We warm-start from historical news replay and label it exactly that.
 - **No deep RL** — a 4-session contest produces tens of trades; PPO/DQN need ~10⁵ episodes. Contextual bandits converge at this sample size, so that's what we use.
 - **No martingale, grid, or averaging down. No naked options. No parameter optimization** — every constant is hand-chosen and justified in config.
+
+## Hackathon submission notes
+
+**Pre-event work disclosure.** The hackathon window opened Friday 28 August 2026
+at 09:30 ET (13:30 UTC). Work on this repository began roughly eleven hours
+earlier, in a single overnight session: the first commit is dated
+**28 Aug 2026 02:22 UTC**, and **38 commits spanning 8h49m** landed before the
+window opened. Everything after that timestamp was built during the window.
+No code predates 28 August, nothing was carried over from an earlier project,
+and the full history with timestamps is public in this repository — verify with:
+
+```bash
+git log --reverse --format="%aI  %s"
+```
+
+**Competition account.** P&L is measured on a dedicated paper account created
+for the contest, funded at $100,000, trading from Monday 31 August 09:30 ET.
+Development and all drills above ran on a separate testing account, whose
+activity forms no part of the official measurement. Positions are flattened
+before the close on Thursday 3 September, ahead of the EOD equity snapshot —
+`manage.flatten_all_at` in `config/default.yaml` is set to that deadline, which
+also avoids any exercise or assignment on 3 September expiries.
+
+**Market data.** Runs on Alpaca's free Basic plan, which provides the
+*indicative* options feed rather than OPRA. Pricing uses latest quotes and
+snapshots, which are real-time on Basic; the 15-minute restriction applies only
+to historical bars and trades, which are used solely for daily realised
+volatility. The liquidity gate's spread threshold is calibrated to what the
+indicative feed actually shows.
 
 ## Disclaimers
 
