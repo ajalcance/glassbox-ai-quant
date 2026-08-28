@@ -291,6 +291,14 @@ class Store:
     def all_bandit_state(self) -> list[sqlite3.Row]:
         return self._conn.execute("SELECT * FROM bandit_state ORDER BY regime, arm").fetchall()
 
+    def positions_opened_on(self, day_prefix: str) -> int:
+        """How many positions were opened on a given day (ISO date prefix)."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM positions WHERE opened_at LIKE ?",
+            (f"{day_prefix}%",),
+        ).fetchone()
+        return int(row["n"])
+
     def open_positions(self) -> list[sqlite3.Row]:
         cur = self._conn.execute(
             "SELECT * FROM positions WHERE status IN ('opening','open','closing')"

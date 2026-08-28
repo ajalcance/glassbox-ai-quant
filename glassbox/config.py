@@ -90,6 +90,13 @@ class MacroCfg(BaseModel):
     events: list[MacroEvent]
 
 
+class FloorCfg(BaseModel):
+    enabled: bool
+    after_time_et: str
+    size_factor: float
+    min_ratio_distance: float
+
+
 class UniverseCfg(BaseModel):
     size: int
     min_option_volume: int
@@ -132,6 +139,7 @@ class Config(BaseModel):
     signal: SignalCfg
     regime: RegimeCfg
     macro: MacroCfg
+    floor: FloorCfg
     universe: UniverseCfg
     llm: LlmCfg
     dashboard: DashboardCfg

@@ -116,8 +116,15 @@ class Trader:
         return Outcome(stage, False, reason)
 
     # -- the pipeline -----------------------------------------------------
-    def process_news(self, item: NewsItem, market: MarketState) -> Outcome:
-        """One news item, start to finish. Never raises for ordinary refusals."""
+    def process_news(self, item: NewsItem, market: MarketState, view_override=None) -> Outcome:
+        """One news item, start to finish. Never raises for ordinary refusals.
+
+        `view_override` carries a previously produced analyst view. Used only by
+        the floor, which re-enters a signal that already passed the filter this
+        morning: by mid-afternoon the same story would fail staleness and
+        novelty against itself, and a second analyst call could quietly produce
+        a different opinion than the one that made it the day's best idea.
+        """
         signal_id = f"{item.symbol}-{item.id}"
 
         if is_halted(self.store):
@@ -130,23 +137,32 @@ class Trader:
         if not market.is_open:
             return self._drop("market_closed", item, "market closed")
 
-        # 1. deterministic filter — kills most of the stream at no model cost
-        verdict = self.filter.evaluate(item, now=self.clock())
-        if not verdict.passed:
-            return self._drop("filter", item, verdict.reason)
+        # 1. deterministic filter — kills most of the stream at no model cost.
+        # A floor re-entry skips it: the story passed this morning, and would
+        # now fail staleness and novelty against itself.
+        if view_override is None:
+            verdict = self.filter.evaluate(item, now=self.clock())
+            if not verdict.passed:
+                return self._drop("filter", item, verdict.reason)
+            novelty = verdict.novelty
+        else:
+            novelty = 1.0
 
         # 2. the analyst reads the text; a bad response is dropped, never repaired
-        try:
-            view = analyse(
-                self.llm,
-                self.cfg,
-                symbol=item.symbol,
-                headline=item.headline,
-                summary=item.summary,
-                source=item.source,
-            )
-        except (LlmUnavailableError, LlmSchemaError) as e:
-            return self._drop("analyst", item, f"{type(e).__name__}: {e}")
+        if view_override is not None:
+            view = view_override
+        else:
+            try:
+                view = analyse(
+                    self.llm,
+                    self.cfg,
+                    symbol=item.symbol,
+                    headline=item.headline,
+                    summary=item.summary,
+                    source=item.source,
+                )
+            except (LlmUnavailableError, LlmSchemaError) as e:
+                return self._drop("analyst", item, f"{type(e).__name__}: {e}")
 
         self.audit.append(
             "analyst_view",
@@ -206,6 +222,7 @@ class Trader:
             realized_move_pct=realized,
             forecast_move_pct=forecast,
             vrp_shift=vrp_shift,
+            relax_band=getattr(self, "_floor_mode", False),
         )
         self.audit.append(
             "edge_test",
@@ -245,6 +262,11 @@ class Trader:
             self.audit.append("prediction_record_error", {"signal_id": signal_id, "error": str(e)})
 
         if not edge.tradable:
+            # A signal refused ONLY for sitting inside the ratio band is a
+            # candidate for the daily best-idea floor. Confidence, bad-data and
+            # VRP refusals are real filters and disqualify outright.
+            if "fairly priced" in edge.detail:
+                self._record_floor_candidate(item, view, edge)
             return Outcome("edge", False, edge.detail, signal_id)
 
         # An intraday thesis is closed at the bell rather than carried
@@ -274,7 +296,7 @@ class Trader:
             realized_vol=realized_vol,
             spread_pct_of_mid=spread_pct,
             is_credit=structure.is_credit,
-            novelty=verdict.novelty,
+            novelty=novelty,
         )
         p, label_detail = self.meta_label(features, view.confidence)
         context_mult = 1.0
@@ -286,6 +308,11 @@ class Trader:
         if macro_window is not None and macro_window.active:
             context_mult *= self.cfg.macro.near_event_size_factor
             context_parts.append(f"macro {self.cfg.macro.near_event_size_factor:.2f}x")
+        if getattr(self, "_floor_mode", False):
+            # A floor trade is a best idea below the organic bar; it never
+            # carries organic conviction, so it never carries organic size.
+            context_mult *= self.cfg.floor.size_factor
+            context_parts.append(f"floor {self.cfg.floor.size_factor:.2f}x")
         sizing = size_position(
             equity=market.equity,
             max_loss_per_spread=risk,
@@ -439,6 +466,101 @@ class Trader:
             return horizon_hours
         hours_to_close = max(0.0, market.minutes_to_close / 60)
         return min(horizon_hours, hours_to_close) if hours_to_close else horizon_hours
+
+    # -- the daily best-idea floor ----------------------------------------
+    def _record_floor_candidate(self, item, view, edge) -> None:
+        """Remember the day's best band-refused signal.
+
+        Score is the ratio's distance from 1.0 — how strongly the idea leans,
+        in either direction. Pure agreement with the market is not an idea.
+        """
+        distance = abs(edge.ratio - 1.0)
+        if distance < self.cfg.floor.min_ratio_distance:
+            return
+        best = getattr(self, "_floor_candidate", None)
+        today = self.clock().date().isoformat()
+        if best and best["day"] == today and best["distance"] >= distance:
+            return
+        self._floor_candidate = {
+            "day": today,
+            "distance": distance,
+            "item": item,
+            "view": view,
+            "ratio": edge.ratio,
+        }
+        self.audit.append(
+            "floor_candidate",
+            {
+                "signal_id": f"{item.symbol}-{item.id}",
+                "symbol": item.symbol,
+                "ratio": edge.ratio,
+                "distance": round(distance, 3),
+                "headline": item.headline[:160],
+            },
+        )
+
+    def maybe_floor_trade(self, market) -> Outcome | None:
+        """Express the day's best idea at reduced size, once, late in the day.
+
+        Runs from the management tick. Every condition is a plain guard so the
+        audit trail shows exactly why a floor trade did or did not happen.
+        """
+
+        from glassbox.clock import MARKET_TZ
+
+        if not self.cfg.floor.enabled or not market.is_open:
+            return None
+        candidate = getattr(self, "_floor_candidate", None)
+        today = self.clock().date().isoformat()
+        if not candidate or candidate["day"] != today:
+            return None
+        if self.store.get_state("floor_trade_date") == today:
+            return None  # once per day, ever
+        if self.store.positions_opened_on(today) > 0:
+            return None  # organic flow already traded; the floor stands down
+
+        hour, minute = (int(x) for x in self.cfg.floor.after_time_et.split(":"))
+        now_et = self.clock().astimezone(MARKET_TZ)
+        if (now_et.hour, now_et.minute) < (hour, minute):
+            return None
+
+        item, view = candidate["item"], candidate["view"]
+        self.audit.append(
+            "floor_trigger",
+            {
+                "symbol": item.symbol,
+                "ratio": candidate["ratio"],
+                "reason": f"no organic trade by {self.cfg.floor.after_time_et} ET",
+            },
+        )
+        # Re-enter the ordinary pipeline with the band relaxed and size halved.
+        # Everything else — VRP, sizing caps, all 18 gate checks — applies in
+        # full. The floor relaxes exactly one bar.
+        self._floor_mode = True
+        try:
+            outcome = self.process_news(self._floor_item(item), market, view_override=view)
+        finally:
+            self._floor_mode = False
+        if outcome.traded:
+            self.store.set_state("floor_trade_date", today)
+        self.audit.append(
+            "floor_outcome",
+            {
+                "symbol": item.symbol,
+                "traded": outcome.traded,
+                "stage": outcome.stage,
+                "reason": outcome.reason[:200],
+            },
+        )
+        return outcome
+
+    @staticmethod
+    def _floor_item(item):
+        """A fresh identity so dedup and idempotency treat this as a distinct
+        decision, clearly labelled in every downstream record."""
+        from dataclasses import replace
+
+        return replace(item, id=f"{item.id}-floor")
 
     def regime_reading(self):
         """Current market regime, or None when the data layer cannot supply it.

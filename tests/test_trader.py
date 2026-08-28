@@ -444,3 +444,154 @@ def test_intraday_thesis_without_room_is_vetoed_not_truncated(store, audit):
     assert not outcome.traded and outcome.stage == "gate"
     assert "session_room" in outcome.reason
     assert router.submitted == []
+
+
+# --- the daily best-idea floor --------------------------------------------
+
+
+def fairly_priced_view(expected=2.9):
+    """The stub chain implies ~2.61%, so ~2.9% sits inside the band (ratio ~1.1)
+    — refused organically, but leaning enough to be a floor candidate."""
+    return AnalystView(
+        event_type="earnings",
+        direction="up",
+        confidence=0.85,
+        expected_move_pct=expected,
+        horizon_hours=48.0,
+        materiality=0.9,
+        rationale="x",
+    )
+
+
+class AdvancingClock:
+    """Morning while the news is processed, afternoon when the floor fires —
+    the same shape as a real session."""
+
+    def __init__(self, at=None):
+        self.at = at or NOW  # NOW is 15:00 UTC = 11:00 ET, fresh news
+
+    def __call__(self):
+        return self.at
+
+    def afternoon(self):
+        """18:30 UTC = 14:30 ET — past the 14:00 floor trigger."""
+        self.at = datetime(2026, 9, 1, 18, 30, tzinfo=UTC)
+
+
+def make_floor_trader(store, audit, router=None, clock=None):
+    return Trader(
+        cfg=CFG,
+        store=store,
+        audit=audit,
+        router=router or StubRouter(),
+        news_filter=NewsFilter({"AAPL"}, CFG.signal),
+        llm=StubLlm(fairly_priced_view()),
+        market_data=StubData(),
+        clock=clock or AdvancingClock(),
+    )
+
+
+def test_band_refusal_becomes_a_floor_candidate(store, audit):
+    t = make_floor_trader(store, audit)
+    out = t.process_news(news(), market())
+    assert not out.traded and out.stage == "edge"
+    assert t._floor_candidate["item"].symbol == "AAPL"
+
+
+def test_pure_agreement_is_not_an_idea(store, audit):
+    """Ratio within min_ratio_distance of 1.0 is a coin flip, not a best idea."""
+    t = make_floor_trader(store, audit)
+    t.llm = StubLlm(fairly_priced_view(expected=2.65))  # ratio ~1.01
+    t.process_news(news(), market())
+    assert getattr(t, "_floor_candidate", None) is None
+
+
+def test_floor_trades_the_candidate_at_reduced_size(store, audit):
+    router = StubRouter()
+    t = make_floor_trader(store, audit, router=router)
+    t.process_news(news(), market())
+    assert router.submitted == []
+
+    t.clock.afternoon()
+    outcome = t.maybe_floor_trade(market())
+    assert outcome is not None and outcome.traded, outcome and outcome.reason
+    assert len(router.submitted) == 1
+    assert store.get_state("floor_trade_date") == "2026-09-01"
+
+
+def test_floor_fires_once_per_day(store, audit):
+    router = StubRouter()
+    t = make_floor_trader(store, audit, router=router)
+    t.process_news(news(), market())
+    t.clock.afternoon()
+    first = t.maybe_floor_trade(market())
+    assert first is not None and first.traded
+    # Candidate for the same day again; the floor must stand down.
+    t.llm = StubLlm(fairly_priced_view())
+    assert t.maybe_floor_trade(market()) is None
+
+
+def test_floor_stands_down_when_organic_flow_traded(store, audit):
+    router = StubRouter()
+    t = make_floor_trader(store, audit, router=router)
+    t.process_news(news(), market())
+    t.clock.afternoon()
+    # An organic position opened today.
+    store.upsert_position(
+        "pos-organic",
+        underlying="AAPL",
+        kind="call_debit_spread",
+        legs_json="[]",
+        qty=1,
+        max_loss=100.0,
+        status="open",
+        opened_at=t.clock().isoformat(),
+    )
+    assert t.maybe_floor_trade(market()) is None
+
+
+def test_floor_waits_for_the_trigger_time(store, audit):
+    t = make_floor_trader(store, audit)  # clock stays at 11:00 ET
+    t.process_news(news(), market())
+    assert t.maybe_floor_trade(market()) is None
+
+
+def test_floor_respects_the_gate(store, audit):
+    """The floor relaxes one bar. A kill switch still refuses it."""
+    router = StubRouter()
+    t = make_floor_trader(store, audit, router=router)
+    t.data._kill = True
+    t.process_news(news(), market())
+    t.clock.afternoon()
+    outcome = t.maybe_floor_trade(market())
+    assert outcome is not None and not outcome.traded
+    assert router.submitted == []
+    assert store.get_state("floor_trade_date") is None, (
+        "a refused floor attempt must not consume the day's one shot"
+    )
+
+
+def test_floor_disabled_is_inert(store, audit, monkeypatch):
+    t = make_floor_trader(store, audit)
+    t.process_news(news(), market())
+    t.clock.afternoon()
+    monkeypatch.setattr(CFG.floor, "enabled", False)
+    try:
+        assert t.maybe_floor_trade(market()) is None
+    finally:
+        monkeypatch.setattr(CFG.floor, "enabled", True)
+
+
+def test_floor_size_is_halved(store, audit):
+    """The floor's audit record shows the context multiplier including 0.5x."""
+    import json as _json
+
+    t = make_floor_trader(store, audit)
+    t.process_news(news(), market())
+    t.clock.afternoon()
+    t.maybe_floor_trade(market())
+    records = _audit_records(audit)
+    ml = [r for r in records if r["kind"] == "ml" and "floor" in r.get("context_detail", "")]
+    assert ml, "floor trade must carry the floor size factor in its ml record"
+    assert ml[-1]["context_multiplier"] <= 0.5 + 1e-9
+    assert _json  # keep import used

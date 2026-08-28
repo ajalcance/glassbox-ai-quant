@@ -17,6 +17,19 @@ Most retail systems have three of these. Professional grade is having all eleven
 | 10b | **Analyst scoring** | Every estimate is recorded when made — traded or not — and scored once its horizon elapses. Every entry threshold is a ratio involving the expected move, so all of them rest on whether the analyst's numbers mean what they appear to |
 | 11 | **Validation** | No backtester (deliberate — LLM look-ahead bias lives in weights). Instead: replay harness for warm-start only, hypothesis property tests on the gate, chaos tests on execution, automated look-ahead audit. |
 
+## The daily best-idea floor
+
+A pure threshold system can end a five-day leaderboard window silent. If nothing
+has traded organically by 14:00 ET, the day's best signal refused *only* for
+sitting inside the ratio band is re-entered with the band relaxed and size
+halved — reusing the morning's analyst view (a second call could quietly change
+the opinion that made it the best idea) and skipping the staleness filter it
+already passed. Everything else applies in full: VRP, sizing caps, all 18 gate
+checks. One per day; it stands down entirely on any day organic flow trades; a
+refused attempt does not consume the day's shot. Every floor record is labelled
+in the audit log — this is a best-ideas book, not a pretended threshold
+crossing.
+
 ## Bandit arms (all defined-risk by construction)
 bull put spread · bear call spread · iron condor · call debit spread · put debit spread · long strangle
 

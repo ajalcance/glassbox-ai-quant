@@ -105,6 +105,21 @@ macro:
     - { at: "2026-09-02T08:15:00-04:00", name: "ADP Employment" }
     - { at: "2026-09-04T08:30:00-04:00", name: "Nonfarm Payrolls" }
 
+floor:
+  # The daily best-idea floor. If nothing has traded organically by the trigger
+  # time, the single best signal that was refused ONLY for sitting inside the
+  # ratio band is expressed at reduced size. Confidence, bad-data, VRP and every
+  # gate refusal disqualify a candidate outright — the floor relaxes exactly one
+  # bar, once per day, at reduced risk, and the full gate still applies at
+  # execution. Enabled for the contest; the nightly calibration decides each day
+  # whether it is still needed.
+  enabled: true
+  after_time_et: "14:00"
+  size_factor: 0.5
+  # A candidate must at least lean somewhere. Ratio within this distance of 1.0
+  # is pure agreement with the market — there is no "best idea" in a coin flip.
+  min_ratio_distance: 0.08
+
 universe:
   size: 50
   min_option_volume: 1000

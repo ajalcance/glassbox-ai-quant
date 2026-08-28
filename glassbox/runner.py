@@ -261,6 +261,14 @@ class Runner:
             return
         for outcome in self.trader.manage_positions(now_utc(), self._deadline):
             print(f"[{now_utc():%H:%M:%S}] CLOSE {outcome.reason[:110]}")
+        try:
+            floor = self.trader.maybe_floor_trade(self.market_state())
+            if floor is not None:
+                marker = "FLOOR TRADE" if floor.traded else "floor declined"
+                print(f"[{now_utc():%H:%M:%S}] {marker}: {floor.reason[:100]}")
+        except Exception as e:  # noqa: BLE001 -- the floor is a convenience; it
+            # must never take the tick down with it.
+            self.audit.append("floor_error", {"error": f"{type(e).__name__}: {e}"})
 
     def poll_news(self) -> None:
         """REST fallback. A silently dead socket looks exactly like a quiet

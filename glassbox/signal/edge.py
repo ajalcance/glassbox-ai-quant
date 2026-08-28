@@ -142,6 +142,7 @@ def evaluate_edge(
     realized_move_pct: float | None = None,
     forecast_move_pct: float | None = None,
     vrp_shift: float = 0.0,
+    relax_band: bool = False,
 ) -> EdgeResult:
     """Compare the analyst's expected move against what the options imply.
 
@@ -201,13 +202,15 @@ def evaluate_edge(
             f"treating as bad data, not opportunity",
         )
 
-    if ratio >= cfg.signal.edge_ratio_debit:
+    debit_bar = 1.0 if relax_band else cfg.signal.edge_ratio_debit
+    credit_bar = 1.0 if relax_band else cfg.signal.edge_ratio_credit
+    if ratio >= debit_bar and ratio > 1.0:
         verdict = EdgeVerdict.LONG_CONVEXITY
         detail = (
             f"expected {expected_move_pct:.2f}% vs implied {implied:.2f}% "
             f"(ratio {ratio:.2f}) — options underpricing this move"
         )
-    elif ratio <= cfg.signal.edge_ratio_credit:
+    elif ratio <= credit_bar and ratio < 1.0:
         verdict = EdgeVerdict.SHORT_PREMIUM
         detail = (
             f"expected {expected_move_pct:.2f}% vs implied {implied:.2f}% "
