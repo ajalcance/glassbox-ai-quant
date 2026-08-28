@@ -37,7 +37,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design an
 
 - **Python 3.12** · alpaca-py · scikit-learn · FastAPI (SSE) — backend
 - **Fireworks AI** — LLM analyst (structured JSON extraction) + nightly report writer
-- **React + Vite** — read-only dashboard (the reasoning layer, not a second broker UI)
+- **FastAPI + SSE, single self-contained HTML page** — read-only dashboard (the reasoning layer, not a second broker UI)
 - **SQLite (WAL) + append-only JSONL audit log** — storage
 - **Docker Compose on a $12 DigitalOcean droplet** — deployment
 
@@ -46,7 +46,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design an
 ```bash
 cp .env.example .env          # fill in Alpaca paper + Fireworks keys
 pip install uv && uv sync
-uv run python -m glassbox.trader --dry-run
+
+uv run python -m glassbox.smoke              # verify connectivity
+uv run python -m glassbox.ml.train           # fit the frozen volatility model
+uv run python -m glassbox.runner --dry-run   # full pipeline, live data, no orders
+uv run python -m glassbox.supervisor.run     # guards + kill switch (separate process)
+uv run python -m glassbox.dashboard.app      # dashboard on :8847
 ```
 
 Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.

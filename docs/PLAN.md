@@ -37,7 +37,11 @@ Then: meta-labeler P(profit) sets size → bandit picks structure → risk gate 
 R = 0.5%/trade · max loss 1.5%/position, 3%/underlying · heat ≤ 6% · delta-dollars ±$15k · vega/gamma capped · daily loss −2% → halt · max DD −6% → halt · 4 straight losses → half size · p < 0.55 → no trade · flatten everything **Thu Sep 3 at close**.
 
 ## Dashboard (demo URL)
-Read-only React SPA (Vite + Tailwind) over FastAPI + SSE. Controls are CLI-only.
+Read-only single-page dashboard served by FastAPI with SSE. Vanilla JS and one
+self-contained HTML file — no build step, no bundler, no node_modules on the
+droplet. The page reads a JSONL log and renders panels; a second toolchain
+would buy nothing and add something else to break on demo day. Controls are
+CLI-only.
 
 **Scope rule: we do not rebuild what Alpaca already provides.** Its dashboard
 shows equity curve, positions, P&L and the order blotter; ours shows only what

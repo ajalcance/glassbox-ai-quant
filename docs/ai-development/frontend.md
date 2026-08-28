@@ -3,9 +3,11 @@
 Read this before touching `dashboard/`.
 
 ## Stack
-React 18 + Vite + Tailwind. Small inline SVG sparklines only — no charting
-library. Data: REST for snapshots, **SSE** (`/api/stream`) for the live decision
-feed. No websocket client, no state library; React context + reducers suffice.
+One self-contained `static/index.html` — vanilla JS, inline CSS, no build step
+and no dependencies. Data: REST for snapshots, **SSE** (`/api/stream`) for the
+live decision feed, with a 15s poll as the safety net. Keep it this way: the
+page renders a JSONL log, and a bundler would add a toolchain to the droplet
+without adding capability.
 
 ## Scope rule — do not rebuild the broker's UI
 Alpaca's dashboard already shows the equity curve, positions, P&L and order

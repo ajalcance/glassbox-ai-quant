@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GlassBox AI Quant</title>
+<style>
+  :root{
+    --ground:#0B1014; --panel:#111820; --panel2:#0E141B; --line:#243140;
+    --ink:#E4EBF2; --muted:#8B98A5; --accent:#56C8B8;
+    --pass:#46C98B; --veto:#E5685C; --warn:#D9A24B;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:14px;line-height:1.5;padding:0 0 60px}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 20px}
+
+  header{border-bottom:1px solid var(--line);padding:22px 0 18px;margin-bottom:22px}
+  .brandrow{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0;letter-spacing:-.01em}
+  h1 span{color:var(--accent)}
+  .tag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted);border:1px solid var(--line);padding:3px 9px;border-radius:3px}
+  .sub{color:var(--muted);font-size:13px;margin:8px 0 0;max-width:70ch}
+  .sub a{color:var(--accent)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;
+    margin-bottom:16px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;
+    padding:16px 18px;min-width:0}
+  .panel.wide{grid-column:1/-1}
+  h2{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 14px;font-weight:500;display:flex;
+    justify-content:space-between;align-items:center;gap:10px}
+  h2 em{font-style:normal;color:var(--accent);font-size:10px;text-align:right;
+    flex-shrink:0;text-transform:none;letter-spacing:.04em}
+
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .big{font-size:26px;font-weight:600;letter-spacing:-.02em}
+  .rows{display:flex;flex-direction:column;gap:9px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .row .k{color:var(--muted);font-size:13px}
+  .row .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  .meter{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin:6px 0 2px}
+  .meter i{display:block;height:100%;background:var(--accent);border-radius:3px;
+    transition:width .4s ease}
+  .meter i.hot{background:var(--warn)} .meter i.over{background:var(--veto)}
+
+  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 7px;
+    border-radius:3px;text-transform:uppercase;white-space:nowrap}
+  .ok{background:rgba(70,201,139,.14);color:var(--pass)}
+  .bad{background:rgba(229,104,92,.14);color:var(--veto)}
+  .warn{background:rgba(217,162,75,.14);color:var(--warn)}
+  .idle{background:var(--panel2);color:var(--muted)}
+
+  .feed{display:flex;flex-direction:column;gap:0;max-height:560px;overflow-y:auto;
+    margin:-4px -4px 0}
+  .dec{border-bottom:1px solid var(--line);padding:12px 4px}
+  .dec:last-child{border-bottom:none}
+  .dechead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .sym{font-family:var(--mono);font-weight:600;color:var(--accent);min-width:52px}
+  .time{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .head{flex:1;min-width:220px;color:var(--ink);font-size:13px}
+  .why{color:var(--muted);font-size:12.5px;margin-top:5px;font-family:var(--mono);
+    word-break:break-word}
+  .checks{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+  .chk{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:2px;
+    background:var(--panel2);color:var(--muted);border:1px solid transparent}
+  .chk.p{color:var(--pass)}
+  .chk.v{color:var(--veto);border-color:rgba(229,104,92,.4);background:rgba(229,104,92,.1)}
+  .edge{display:flex;gap:16px;flex-wrap:wrap;margin-top:7px;font-family:var(--mono);
+    font-size:11.5px;color:var(--muted)}
+  .edge b{color:var(--ink);font-weight:500}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);text-align:left;font-weight:500;padding:0 8px 8px 0}
+  td{padding:6px 8px 6px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+  td.n{font-family:var(--mono);text-align:right}
+  .empty{color:var(--muted);font-size:13px;padding:14px 0;text-align:center}
+  .flash{animation:flash 1.4s ease}
+  @keyframes flash{from{background:rgba(86,200,184,.13)}to{background:transparent}}
+  @media (prefers-reduced-motion:reduce){.flash{animation:none}.meter i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brandrow">
+    <h1>Glass<span>Box</span> AI Quant</h1>
+    <span class="tag">Paper trading</span>
+    <span class="tag" id="conn">connecting</span>
+    <span class="tag" id="stamp">—</span>
+  </div>
+  <p class="sub">
+    The reasoning layer. Equity, positions and orders live on
+    <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" rel="noopener">
+    your Alpaca dashboard</a> — this page shows what the broker cannot: why each
+    decision was made, and every trade the risk gate refused to place.
+  </p>
+</header>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Risk budget <em id="riskstate"></em></h2>
+    <div class="rows">
+      <div>
+        <div class="row"><span class="k">Portfolio heat</span>
+          <span class="v" id="heat">—</span></div>
+        <div class="meter"><i id="heatbar" style="width:0%"></i></div>
+      </div>
+      <div>
+        <div class="row"><span class="k">Net delta exposure</span>
+          <span class="v" id="delta">—</span></div>
+        <div class="meter"><i id="deltabar" style="width:0%"></i></div>
+      </div>
+      <div class="row"><span class="k">Open positions</span>
+        <span class="v" id="npos">—</span></div>
+      <div class="row"><span class="k">Risk per trade</span>
+        <span class="v" id="rpt">—</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>System health</h2>
+    <div class="rows">
+      <div class="row"><span class="k">Trading state</span>
+        <span id="halt" class="pill idle">—</span></div>
+      <div class="row"><span class="k">Trader heartbeat</span>
+        <span id="hb" class="pill idle">—</span></div>
+      <div class="row"><span class="k">Audit chain</span>
+        <span id="chain" class="pill idle">—</span></div>
+      <div class="row"><span class="k">Guards</span>
+        <span class="v" id="guards">—</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Learning state</h2>
+    <div class="rows">
+      <div class="row"><span class="k">Meta-labeler</span>
+        <span id="metastate" class="pill idle">—</span></div>
+      <div>
+        <div class="row"><span class="k">Training outcomes</span>
+          <span class="v" id="metan">—</span></div>
+        <div class="meter"><i id="metabar" style="width:0%"></i></div>
+      </div>
+      <div class="row"><span class="k">Bandit cells explored</span>
+        <span class="v" id="arms">—</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel wide">
+    <h2>Decision feed <em>news → estimate → edge test → gate</em></h2>
+    <div class="feed" id="feed"><div class="empty">waiting for decisions…</div></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Refusals <em>not visible at the broker</em></h2>
+    <div class="rows" id="vetosummary"></div>
+    <table style="margin-top:12px"><thead><tr><th>Gate check</th><th style="text-align:right">Vetoes</th></tr></thead>
+      <tbody id="vetotable"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Bandit posteriors <em>Thompson sampling</em></h2>
+    <table><thead><tr><th>Structure</th><th>Regime</th>
+      <th style="text-align:right">Pulls</th><th style="text-align:right">Est. win rate</th></tr></thead>
+      <tbody id="bandit"></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>P&amp;L by structure <em>attribution, not equity</em></h2>
+    <table><thead><tr><th>Structure</th><th style="text-align:right">Trades</th>
+      <th style="text-align:right">Win rate</th><th style="text-align:right">P&amp;L</th></tr></thead>
+      <tbody id="pnl"></tbody></table>
+  </div>
+</div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = n => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined,
+  {minimumFractionDigits:0, maximumFractionDigits:0});
+const pct = n => (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function setBar(el, fraction) {
+  const w = Math.min(100, Math.max(0, fraction * 100));
+  el.style.width = w + "%";
+  el.className = w >= 100 ? "over" : w >= 70 ? "hot" : "";
+}
+
+function renderState(s) {
+  const r = s.risk;
+  $("heat").textContent = `${money(r.heat)} of ${money(r.heat_cap)}`;
+  setBar($("heatbar"), r.heat_cap ? r.heat / r.heat_cap : 0);
+  $("delta").textContent = `${money(r.delta_dollars)} of ±${money(r.delta_band)}`;
+  setBar($("deltabar"), r.delta_band ? Math.abs(r.delta_dollars) / r.delta_band : 0);
+  $("npos").textContent = r.open_positions;
+  $("rpt").textContent = r.r_per_trade_pct.toFixed(2) + "% of equity";
+  $("riskstate").textContent = r.open_positions ? "" : "flat";
+  $("guards").textContent =
+    `daily ${pct(-r.daily_loss_halt_pct)} · drawdown ${pct(-r.max_drawdown_halt_pct)}`;
+
+  const h = s.health;
+  const halt = $("halt");
+  halt.textContent = h.halted ? "halted" : "running";
+  halt.className = "pill " + (h.halted ? "bad" : "ok");
+  if (h.halted) halt.title = h.halt_reason;
+
+  const hb = $("hb"), age = h.heartbeat_age_seconds;
+  if (age === null || age === undefined) { hb.textContent = "never"; hb.className = "pill idle"; }
+  else if (age > 90) { hb.textContent = Math.round(age) + "s stale"; hb.className = "pill bad"; }
+  else { hb.textContent = Math.round(age) + "s ago"; hb.className = "pill ok"; }
+
+  const ch = $("chain"), a = h.audit_chain;
+  ch.textContent = a.verified ? `verified · ${a.records}` : "BROKEN";
+  ch.className = "pill " + (a.verified ? "ok" : "bad");
+
+  const m = s.learning.meta_labeler, ms = $("metastate");
+  ms.textContent = m.trained ? "trained" : "abstaining";
+  ms.className = "pill " + (m.trained ? "ok" : "warn");
+  ms.title = m.trained ? "" : "using the analyst's own confidence until trained";
+  $("metan").textContent = `${m.n_samples} / ${m.min_samples} needed`;
+  setBar($("metabar"), m.min_samples ? m.n_samples / m.min_samples : 0);
+  $("arms").textContent = s.learning.bandit.length;
+
+  $("bandit").innerHTML = s.learning.bandit.length
+    ? s.learning.bandit.map(b => `<tr><td>${esc(b.arm)}</td><td>${esc(b.regime)}</td>
+        <td class="n">${b.pulls}</td><td class="n">${(b.mean*100).toFixed(0)}%</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">no arm has been played yet</td></tr>`;
+
+  const p = s.learning.pnl_by_arm;
+  $("pnl").innerHTML = p.length
+    ? p.map(x => `<tr><td>${esc(x.arm)}</td><td class="n">${x.trades}</td>
+        <td class="n">${(x.win_rate*100).toFixed(0)}%</td>
+        <td class="n" style="color:${x.pnl>=0?'var(--pass)':'var(--veto)'}">${money(x.pnl)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">no closed positions yet</td></tr>`;
+
+  $("stamp").textContent = new Date(s.generated_at).toLocaleTimeString();
+}
+
+function renderVetoes(v) {
+  const refused = v.total_seen - v.total_traded;
+  $("vetosummary").innerHTML = `
+    <div class="row"><span class="k">Signals evaluated</span>
+      <span class="v">${v.total_seen}</span></div>
+    <div class="row"><span class="k">Refused</span>
+      <span class="v" style="color:var(--veto)">${refused}</span></div>
+    <div class="row"><span class="k">Reached the market</span>
+      <span class="v" style="color:var(--pass)">${v.total_traded}</span></div>`;
+  $("vetotable").innerHTML = v.by_check.length
+    ? v.by_check.map(([name, n]) =>
+        `<tr><td>${esc(name)}</td><td class="n">${n}</td></tr>`).join("")
+    : `<tr><td colspan="2" class="empty">no gate vetoes recorded</td></tr>`;
+}
+
+function decisionRow(d) {
+  const badge = {traded:["ok","traded"], vetoed:["bad","vetoed"],
+    dropped:["idle","dropped"], no_edge:["idle","no edge"]}[d.outcome] || ["idle", d.outcome];
+  let checks = "";
+  if (d.gate && d.gate.checks) {
+    checks = `<div class="checks">` + d.gate.checks.map(c =>
+      `<span class="chk ${c.passed?'p':'v'}" title="${esc(c.detail)}">${esc(c.name)}</span>`
+    ).join("") + `</div>`;
+  }
+  let edge = "";
+  if (d.edge) {
+    edge = `<div class="edge">
+      <span>expected <b>${(d.edge.expected_move_pct ?? 0).toFixed(2)}%</b></span>
+      <span>implied <b>${(d.edge.implied_move_pct ?? 0).toFixed(2)}%</b></span>
+      <span>ratio <b>${(d.edge.ratio ?? 0).toFixed(2)}</b></span>
+      ${d.ml ? `<span>p(profit) <b>${(d.ml.meta_label_p ?? 0).toFixed(2)}</b></span>` : ""}
+      ${d.ml ? `<span>regime <b>${esc(d.ml.regime)}</b></span>` : ""}
+    </div>`;
+  }
+  return `<div class="dec">
+    <div class="dechead">
+      <span class="sym">${esc(d.symbol || "—")}</span>
+      <span class="head">${esc(d.headline || d.signal_id)}</span>
+      <span class="pill ${badge[0]}">${badge[1]}</span>
+      <span class="time">${d.ts ? new Date(d.ts).toLocaleTimeString() : ""}</span>
+    </div>
+    ${edge}
+    ${d.reason ? `<div class="why">${esc(d.reason)}</div>` : ""}
+    ${checks}
+  </div>`;
+}
+
+function renderDecisions(list) {
+  $("feed").innerHTML = list.length
+    ? list.map(decisionRow).join("")
+    : `<div class="empty">no decisions yet — the agent is watching the news stream</div>`;
+}
+
+async function refresh() {
+  try {
+    const [s, v, d] = await Promise.all([
+      fetch("/api/state").then(r => r.json()),
+      fetch("/api/vetoes").then(r => r.json()),
+      fetch("/api/decisions").then(r => r.json()),
+    ]);
+    renderState(s); renderVetoes(v); renderDecisions(d.decisions);
+    $("conn").textContent = "live"; $("conn").style.color = "var(--pass)";
+  } catch (e) {
+    $("conn").textContent = "reconnecting"; $("conn").style.color = "var(--warn)";
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+
+// Push updates arrive faster than the poll; the poll is the safety net.
+const es = new EventSource("/api/stream");
+es.onmessage = () => { refresh(); $("feed").classList.add("flash");
+  setTimeout(() => $("feed").classList.remove("flash"), 1400); };
+es.onerror = () => { $("conn").textContent = "reconnecting"; };
+</script>
+</body>
+</html>
