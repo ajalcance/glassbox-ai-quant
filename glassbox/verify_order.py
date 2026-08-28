@@ -10,11 +10,12 @@ then cancels. Proves the whole execution path end to end without taking risk.
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from alpaca.trading.requests import GetOptionContractsRequest
 
 from glassbox.audit import AuditLog
+from glassbox.clock import market_date, parse_expiry
 from glassbox.config import load_config
 from glassbox.data.alpaca_client import trading_client
 from glassbox.execution.ids import client_order_id
@@ -32,17 +33,12 @@ from glassbox.structures import (
 )
 
 
-def _parse_expiry(contract) -> date:
-    exp = contract.expiration_date
-    return exp if isinstance(exp, date) else datetime.strptime(str(exp), "%Y-%m-%d").date()
-
-
 def build_far_otm_put_spread(client) -> Structure:
     """Two puts far below spot, same expiry, 5 points apart."""
     req = GetOptionContractsRequest(
         underlying_symbols=["SPY"],
-        expiration_date_gte=(date.today() + timedelta(days=7)).isoformat(),
-        expiration_date_lte=(date.today() + timedelta(days=45)).isoformat(),
+        expiration_date_gte=(market_date() + timedelta(days=7)).isoformat(),
+        expiration_date_lte=(market_date() + timedelta(days=45)).isoformat(),
         type="put",
         limit=500,
     )
@@ -52,7 +48,7 @@ def build_far_otm_put_spread(client) -> Structure:
 
     by_expiry: dict[date, list] = {}
     for c in contracts:
-        by_expiry.setdefault(_parse_expiry(c), []).append(c)
+        by_expiry.setdefault(parse_expiry(c.expiration_date), []).append(c)
     expiry = min(by_expiry)
     strikes = sorted(by_expiry[expiry], key=lambda c: float(c.strike_price))
 

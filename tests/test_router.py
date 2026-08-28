@@ -1,6 +1,7 @@
 """Router tests, including the chaos cases: broker timeouts, duplicate
 submissions, and the invariant that a naked structure can never reach the wire.
 """
+
 import pytest
 
 from glassbox.execution.breaker import BreakerOpenError, CircuitBreaker
@@ -17,11 +18,11 @@ class FakeOrder:
 class FakeClient:
     """Records submissions; can be told to fail a number of times first."""
 
-    def __init__(self, fail_times=0, exc=ConnectionError("alpaca 503")):
+    def __init__(self, fail_times=0, exc=None):
         self.submitted = []
         self.canceled = []
         self.fail_times = fail_times
-        self.exc = exc
+        self.exc = exc or ConnectionError("alpaca 503")
 
     def submit_order(self, request):
         if self.fail_times > 0:
@@ -40,11 +41,12 @@ def make_router(store, audit, **kw):
 
 # ---- idempotency ---------------------------------------------------------
 
+
 def test_ids_are_deterministic_and_distinct():
     a = client_order_id("sig-1", "SPY|bull_put|x", 0)
     assert a == client_order_id("sig-1", "SPY|bull_put|x", 0)
-    assert a != client_order_id("sig-1", "SPY|bull_put|x", 1)      # retry differs
-    assert a != client_order_id("sig-2", "SPY|bull_put|x", 0)      # signal differs
+    assert a != client_order_id("sig-1", "SPY|bull_put|x", 1)  # retry differs
+    assert a != client_order_id("sig-2", "SPY|bull_put|x", 0)  # signal differs
     # a stop-loss close and a time-stop close are different orders
     assert close_order_id("p1", "stop") != close_order_id("p1", "time")
     assert close_order_id("p1", "stop") == close_order_id("p1", "stop")
@@ -73,6 +75,7 @@ def test_intent_persisted_before_submission(store, audit, bull_put):
 
 
 # ---- safety invariants ---------------------------------------------------
+
 
 def test_naked_structure_never_reaches_broker(store, audit, naked_put):
     router = make_router(store, audit)
@@ -109,9 +112,12 @@ def test_closing_order_inverts_every_leg(store, audit, bull_put):
 
 # ---- chaos ---------------------------------------------------------------
 
+
 def test_repeated_broker_failure_opens_breaker(store, audit, bull_put):
     router = OrderRouter(
-        FakeClient(fail_times=99), store, audit,
+        FakeClient(fail_times=99),
+        store,
+        audit,
         breaker=CircuitBreaker(failure_threshold=3, clock=lambda: 0.0),
     )
     for i in range(3):
@@ -123,6 +129,7 @@ def test_repeated_broker_failure_opens_breaker(store, audit, bull_put):
 
 
 # ---- price ladder --------------------------------------------------------
+
 
 def test_ladder_walks_debit_up_and_credit_down():
     debit = PriceLadder(start=2.00, tick=0.05, max_steps=3, is_debit=True)
