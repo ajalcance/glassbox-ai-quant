@@ -47,6 +47,8 @@ class GateContext:
     minutes_since_open: int
     minutes_to_close: int
     hours_to_expiry: float
+    # The analyst's stated horizon, used to check the session has room for it.
+    horizon_hours: float = 0.0
     # --- system -----------------------------------------------------------
     halted: bool = False
     kill_switch: bool = False
@@ -130,6 +132,38 @@ def _check_market_window(ctx, cfg) -> CheckResult:
             f"{ctx.minutes_to_close}m to close < {cfg.gate.skip_last_minutes}m",
         )
     return CheckResult("market_window", True, f"{ctx.minutes_to_close}m to close")
+
+
+def _check_session_room(ctx, cfg) -> CheckResult:
+    """Does the session have room for this thesis to play out?
+
+    An intraday thesis entered with less time left than it needs cannot resolve
+    before the close, so we would be paying entry cost for an outcome that has
+    no room to occur. A multi-day thesis is exempt: holding overnight is what it
+    is for.
+    """
+    if ctx.horizon_hours <= 0:
+        return CheckResult("session_room", True, "no horizon supplied")
+    if ctx.horizon_hours > cfg.gate.intraday_horizon_hours:
+        return CheckResult(
+            "session_room",
+            True,
+            f"{ctx.horizon_hours:.0f}h thesis spans sessions by design",
+        )
+
+    needed = ctx.horizon_hours * 60 * cfg.gate.min_session_fraction
+    if ctx.minutes_to_close < needed:
+        return CheckResult(
+            "session_room",
+            False,
+            f"{ctx.minutes_to_close}m to close < {needed:.0f}m needed for a "
+            f"{ctx.horizon_hours:.0f}h thesis",
+        )
+    return CheckResult(
+        "session_room",
+        True,
+        f"{ctx.minutes_to_close}m to close covers a {ctx.horizon_hours:.0f}h thesis",
+    )
 
 
 def _check_defined_risk(ctx, cfg) -> CheckResult:
@@ -298,6 +332,7 @@ CHECKS: tuple[Callable, ...] = (
     _check_kill_switch,
     _check_halted,
     _check_market_window,
+    _check_session_room,
     _check_defined_risk,
     _check_position_size,
     _check_portfolio_heat,

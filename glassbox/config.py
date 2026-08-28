@@ -44,6 +44,8 @@ class GateCfg(BaseModel):
     max_new_positions_per_day: int
     skip_first_minutes: int
     skip_last_minutes: int
+    intraday_horizon_hours: float
+    min_session_fraction: float
     max_spread_pct_of_mid: float
     min_open_interest: int
 

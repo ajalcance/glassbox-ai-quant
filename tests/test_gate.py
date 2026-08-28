@@ -221,3 +221,44 @@ def test_property_approved_never_exceeds_heat_cap(qty, max_loss, heat):
         projected = heat + qty * max_loss
         assert projected <= equity * (CFG.risk.portfolio_heat_pct / 100) + 1e-6
         assert qty * max_loss <= equity * (CFG.risk.max_loss_per_position_pct / 100) + 1e-6
+
+
+# --- session room ---------------------------------------------------------
+
+
+def test_intraday_thesis_needs_room_before_the_close(bull_put):
+    """A four-hour thesis entered with forty minutes left cannot resolve."""
+    d = evaluate(ctx(structure=bull_put, horizon_hours=4.0, minutes_to_close=40), CFG)
+    assert not d.approved and "session_room" in veto_names(d)
+
+
+def test_intraday_thesis_with_enough_room_passes(bull_put):
+    # 4h thesis needs 120m at min_session_fraction 0.5
+    d = evaluate(ctx(structure=bull_put, horizon_hours=4.0, minutes_to_close=150), CFG)
+    assert d.approved, d.reason
+
+
+def test_boundary_is_exactly_half_the_horizon(bull_put):
+    tight = evaluate(ctx(structure=bull_put, horizon_hours=4.0, minutes_to_close=119), CFG)
+    ok = evaluate(ctx(structure=bull_put, horizon_hours=4.0, minutes_to_close=120), CFG)
+    assert "session_room" in veto_names(tight)
+    assert "session_room" not in veto_names(ok)
+
+
+def test_multi_day_thesis_is_exempt(bull_put):
+    """Spanning sessions is the point of a multi-day view."""
+    d = evaluate(ctx(structure=bull_put, horizon_hours=48.0, minutes_to_close=30), CFG)
+    assert "session_room" not in veto_names(d)
+
+
+def test_no_horizon_supplied_does_not_block(bull_put):
+    d = evaluate(ctx(structure=bull_put, horizon_hours=0.0), CFG)
+    assert "session_room" not in veto_names(d)
+
+
+def test_widened_session_edges_are_enforced(bull_put):
+    """The first and last stretches carry wide spreads and unstable IV."""
+    early = evaluate(ctx(structure=bull_put, minutes_since_open=10), CFG)
+    late = evaluate(ctx(structure=bull_put, minutes_to_close=15), CFG)
+    assert "market_window" in veto_names(early)
+    assert "market_window" in veto_names(late)

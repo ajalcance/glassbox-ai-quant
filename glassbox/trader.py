@@ -219,6 +219,12 @@ class Trader:
         if not edge.tradable:
             return Outcome("edge", False, edge.detail, signal_id)
 
+        # An intraday thesis is closed at the bell rather than carried
+        # overnight. The time barrier would otherwise fire hours after the
+        # market shut, turning a four-hour view into an eighteen-hour hold on a
+        # thesis that expired at the close.
+        effective_horizon = self.effective_horizon(view.horizon_hours, market)
+
         # 5. express the view in a defined-risk structure
         realized_vol = self.data.realized_vol(item.symbol)
         regime = classify_regime(realized_vol, self.cfg.ml.vol_regime_bounds)
@@ -280,6 +286,7 @@ class Trader:
             minutes_since_open=market.minutes_since_open,
             minutes_to_close=market.minutes_to_close,
             hours_to_expiry=hours_to_expiry,
+            horizon_hours=view.horizon_hours,
             halted=is_halted(self.store),
             kill_switch=self.data.kill_switch(),
             portfolio=snapshot(self.store),
@@ -320,7 +327,7 @@ class Trader:
             entry_price=net_price,
             max_loss=risk * sizing.qty,
             status="opening",
-            horizon_hours=view.horizon_hours,
+            horizon_hours=effective_horizon,
             opened_at=self.clock().isoformat(),
         )
         self.router.submit_structure(structure, sizing.qty, net_price, coid, position_id)
@@ -378,6 +385,19 @@ class Trader:
             return eligible[0], "no bandit; edge test's first choice"
         choice = self.bandit.select(eligible, regime)
         return choice.kind, choice.detail
+
+    def effective_horizon(self, horizon_hours: float, market) -> float:
+        """The horizon the trade manager will actually use.
+
+        An intraday thesis is truncated to the close: the news jump it was
+        formed on resolves inside the session, and holding past the bell leaves
+        an expired thesis carrying overnight gap risk with nobody managing it.
+        A multi-day thesis is left alone — spanning sessions is its purpose.
+        """
+        if horizon_hours > self.cfg.gate.intraday_horizon_hours:
+            return horizon_hours
+        hours_to_close = max(0.0, market.minutes_to_close / 60)
+        return min(horizon_hours, hours_to_close) if hours_to_close else horizon_hours
 
     def corporate_blackout(self, symbol: str, structure, horizon_hours: float):
         """Upcoming corporate actions for the underlying, or None if unchecked.

@@ -23,8 +23,19 @@ sizing:
 gate:
   max_orders_per_minute: 5
   max_new_positions_per_day: 10
-  skip_first_minutes: 5
-  skip_last_minutes: 10
+  # Option spreads are wide and implied vol is unstable while the market finds
+  # its footing after the open, and the last stretch carries closing-auction
+  # noise on top of the same problem. The liquidity check catches some of this
+  # incidentally; these make it deliberate.
+  skip_first_minutes: 15
+  skip_last_minutes: 20
+  # A thesis at or under this many hours is intraday and must resolve inside the
+  # session. Above it, holding overnight is the stated intent.
+  intraday_horizon_hours: 8.0
+  # How much of an intraday horizon must fit before the close. A four-hour
+  # thesis entered with forty minutes left cannot resolve; we would be paying
+  # entry cost for an outcome that has no room to occur.
+  min_session_fraction: 0.5
   max_spread_pct_of_mid: 5.0     # option liquidity check
   min_open_interest: 200
 

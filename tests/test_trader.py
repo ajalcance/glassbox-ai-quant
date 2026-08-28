@@ -372,3 +372,75 @@ def test_closed_market_skips_the_model_entirely(store, audit):
     out = t.process_news(news(), market(is_open=False))
     assert not out.traded and out.stage == "market_closed"
     assert llm.calls == 0, "analyst was called on news we could not act on"
+
+
+# --- time-of-day handling -------------------------------------------------
+
+
+def test_intraday_horizon_truncates_to_the_close(store, audit):
+    """A four-hour thesis with two hours left becomes a two-hour thesis, not an
+    eighteen-hour overnight hold on a view that expired at the bell."""
+    t = make_trader(store, audit)
+    assert t.effective_horizon(4.0, market(minutes_to_close=120)) == pytest.approx(2.0)
+
+
+def test_intraday_horizon_left_alone_when_the_session_is_long_enough(store, audit):
+    t = make_trader(store, audit)
+    assert t.effective_horizon(4.0, market(minutes_to_close=300)) == pytest.approx(4.0)
+
+
+def test_multi_day_horizon_is_not_truncated(store, audit):
+    """Spanning sessions is what a multi-day thesis is for."""
+    t = make_trader(store, audit)
+    assert t.effective_horizon(48.0, market(minutes_to_close=60)) == pytest.approx(48.0)
+
+
+def test_stored_horizon_is_the_truncated_one(store, audit):
+    """The trade manager reads this value, so truncation has to reach the store."""
+    t = make_trader(store, audit)
+    outcome = t.process_news(news(), market(minutes_to_close=180))
+    assert outcome.traded, outcome.reason
+    row = store.open_positions()[0]
+    # The stub analyst states 48h, which is multi-day and passes through intact.
+    assert float(row["horizon_hours"]) == pytest.approx(48.0)
+
+
+def test_intraday_thesis_is_stored_truncated_end_to_end(store, audit):
+    """The whole point: an intraday view entered late must be closed at the bell,
+    and the trade manager only knows that through the stored horizon."""
+    view = AnalystView(
+        event_type="earnings",
+        direction="up",
+        confidence=0.85,
+        expected_move_pct=4.0,
+        horizon_hours=6.0,  # intraday
+        materiality=0.9,
+        rationale="x",
+    )
+    t = make_trader(store, audit, llm=StubLlm(view))
+    outcome = t.process_news(news(), market(minutes_to_close=200))
+    assert outcome.traded, outcome.reason
+    row = store.open_positions()[0]
+    assert float(row["horizon_hours"]) == pytest.approx(200 / 60), (
+        "a 6h thesis with 3h20m of session left must be stored as 3h20m"
+    )
+
+
+def test_intraday_thesis_without_room_is_vetoed_not_truncated(store, audit):
+    """Truncating a 6h thesis to 30 minutes would be a different trade. Below the
+    session-room floor we decline instead."""
+    view = AnalystView(
+        event_type="earnings",
+        direction="up",
+        confidence=0.85,
+        expected_move_pct=4.0,
+        horizon_hours=6.0,
+        materiality=0.9,
+        rationale="x",
+    )
+    router = StubRouter()
+    t = make_trader(store, audit, llm=StubLlm(view), router=router)
+    outcome = t.process_news(news(), market(minutes_to_close=30))
+    assert not outcome.traded and outcome.stage == "gate"
+    assert "session_room" in outcome.reason
+    assert router.submitted == []
