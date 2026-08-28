@@ -15,6 +15,7 @@ the rest of the design exists to avoid.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import sys
 from pathlib import Path
@@ -90,7 +91,21 @@ def train_metalabel(cfg, models_dir: Path) -> int:
 
     model = MetaLabeler.train(rows, min_samples=cfg.ml.min_training_samples)
     path = models_dir / "metalabel.pkl"
-    model.save(path)
+    try:
+        model.save(path)
+    except OSError as e:
+        if e.errno != errno.EROFS:
+            raise
+        # Deployed containers mount models/ read-only BY DESIGN — a container
+        # must not rewrite its own model. The nightly refit is therefore a
+        # deliberate no-op there: training happens on the operator's machine
+        # and ships as an artifact. Exiting 0 keeps the scheduler's job record
+        # clean instead of logging a stack trace every night forever.
+        print(
+            f"models/ is read-only ({path}): refit skipped by design in deployed "
+            "containers — train on the operator machine and ship the artifact"
+        )
+        return 0
 
     if model.is_trained:
         print(f"meta-labeler trained on {model.n_samples} outcomes -> {path}")

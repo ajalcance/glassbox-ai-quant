@@ -361,6 +361,7 @@ class Trader:
             meta_label_p=p,
             cfg=self.cfg,
             underlying_vol=realized_vol,
+            target_vol=self.cfg.sizing.target_daily_vol,
             loss_streak=market.loss_streak,
             context_multiplier=context_mult,
         )

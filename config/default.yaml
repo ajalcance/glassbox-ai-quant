@@ -10,13 +10,24 @@ risk:
   max_loss_per_position_pct: 1.5
   max_loss_per_underlying_pct: 3.0
   portfolio_heat_pct: 6.0        # sum of max-loss across open positions
-  delta_dollars_band: 15000      # net |delta $| limit
+  # Net |delta $| limit. Calibrated against live data Fri Aug 28: one 1-lot
+  # ATM SPY debit vertical carries $25-35k of delta-dollars (0.3-0.45 delta
+  # x 100 x ~$770 spot), so the original 15000 vetoed the strategy's own core
+  # structure on its most liquid underlying. 40000 fits ~1.3 such verticals
+  # while still capping the book's directional exposure.
+  delta_dollars_band: 40000
   daily_loss_halt_pct: 2.0       # supervisor: flatten + halt for session
   max_drawdown_halt_pct: 6.0     # supervisor: flatten + halt, manual reset
   loss_streak_half_size: 4       # consecutive losses before halving R
   min_meta_label_p: 0.55         # below this, no trade
 
 sizing:
+  # Reference daily vol for the volatility budget: vol_budget scales risk by
+  # target_daily_vol / realised_vol. Was hardcoded at 0.01, which zeroed any
+  # name above ~2.2% daily vol (live Fri: NVDA had $342 of fixed-fractional
+  # budget but a $200 vol budget -> no trade). 0.02 sizes one spread up to
+  # ~4.5% daily vol; hotter names still shrink toward zero as intended.
+  target_daily_vol: 0.02
   # Risk limits are backstops, not operating points. A portfolio approaching its
   # budget should take smaller bites, not identical ones until it hits a wall.
   # Below the start fraction nothing changes; between there and the cap the
@@ -62,7 +73,11 @@ gate:
   # thesis entered with forty minutes left cannot resolve; we would be paying
   # entry cost for an outcome that has no room to occur.
   min_session_fraction: 0.5
-  max_spread_pct_of_mid: 5.0     # option liquidity check
+  # Option liquidity check. Live Fri session: 5.0 correctly killed junk
+  # (CVX 57%, PYPL 36%) but also vetoed midday SPY at 6.5%. 10.0 passes
+  # liquid-underlying spreads while single-name junk stays vetoed; the
+  # price ladder still works from mid, bounding what a wide market costs.
+  max_spread_pct_of_mid: 10.0
   min_open_interest: 200
 
 manage:

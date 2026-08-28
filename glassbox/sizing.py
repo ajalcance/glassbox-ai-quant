@@ -147,9 +147,16 @@ def size_position(
     qty = min(qty, int(position_cap // max_loss_per_spread))
 
     if qty < 1:
+        # Name the budget that actually bound — a drop blamed on the wrong
+        # number sends the operator tuning the wrong knob.
+        limiting = (
+            f"vol budget ${vol_budget:.0f}"
+            if vol_qty < fixed_qty
+            else f"budget ${r_dollars:.0f}"
+        )
         return SizingResult(
             0,
-            f"budget ${r_dollars:.0f} < one spread at ${max_loss_per_spread:.0f} risk",
+            f"{limiting} < one spread at ${max_loss_per_spread:.0f} risk",
             r_dollars,
             mult,
             fixed_qty,

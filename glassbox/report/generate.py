@@ -287,7 +287,11 @@ def write_report(cfg, store, llm, day: date | None = None, cli_snapshot=None) ->
             # narrative is a convenience and must never block it being written.
             prose = f"_Narrative unavailable ({type(e).__name__})._"
 
-    out_dir = Path("reports")
+    # Under data/ so reports land on the persisted state volume in deployed
+    # containers. The old bare reports/ sat in the container's own filesystem
+    # layer, where every image recreate silently discarded them — the nightly
+    # evidence trail must survive a redeploy.
+    out_dir = Path("data/reports")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{day:%Y-%m-%d}.md"
     path.write_text(render_markdown(stats, learning, prose, cli_snapshot))

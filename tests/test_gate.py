@@ -93,9 +93,11 @@ def test_heat_cap_blocks_when_book_is_full(bull_put):
 
 
 def test_delta_band_blocks(bull_put):
-    d = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=20_000)), CFG)
+    over = CFG.risk.delta_dollars_band + 1_000  # relative to config: the band
+    # is a calibration number and the test must not re-pin its value
+    d = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=over)), CFG)
     assert not d.approved and "greeks_bands" in veto_names(d)
-    d2 = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=-20_000)), CFG)
+    d2 = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=-over)), CFG)
     assert not d2.approved, "band must be symmetric"
 
 
