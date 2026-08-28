@@ -44,27 +44,57 @@ unresponsive. The supervisor polls for it independently. It lives at
 stack: one touch is seen by every container as well as host-run processes
 (`make kill` writes both the host file and, when the stack is up, the volume).
 
-## On a server (optional)
+## On a server
 
-Any Ubuntu 24.04 box with Docker. A DigitalOcean 2 GB droplet is about $12/mo
-billed hourly — roughly $3 for a contest week. Use **NYC** for latency to Alpaca.
+Any Ubuntu 24.04 box with Docker. A 2 GB / 1 vCPU instance is about $10/mo
+billed hourly — roughly $3 for a contest week — and is enough to run the whole
+stack. **Choose a US East region** (Northern Virginia, Atlanta, New Jersey):
+Alpaca's API is in `us-east-1`, and hosting in Asia or Europe adds 150-250 ms to
+every broker call, which compounds across the several sequential calls each
+decision makes.
+
+Provision the host once:
 
 ```bash
-# on the droplet, as a non-root user with docker installed
+# on a NEW instance: paste deploy/cloud-init.yaml into the provider's user-data
+# field at creation (edit in your public key first).
+
+# on an instance that already exists — cloud-init has already run, so:
+ssh-copy-id -i ~/.ssh/id_ed25519.pub root@YOUR_IP     # once, then key auth only
+ssh root@YOUR_IP 'bash -s' < deploy/bootstrap.sh
+```
+
+Either path installs Docker, adds 2 GB of swap, opens only 22/80/443, creates a
+non-root `glassbox` user, and disables password authentication. **Swap is not
+optional**: the stack runs in 2 GB but building the image on one vCPU peaks
+higher, and an OOM-killed build leaves a broken image that fails later in ways
+that look unrelated to memory.
+
+Then deploy:
+
+```bash
 git clone https://github.com/ajalcance/glassbox-ai-quant.git
 cd glassbox-ai-quant
 cp .env.example .env && nano .env          # keys, and SITE_ADDRESS=your.domain
 docker compose up -d --build
 ```
 
-Firewall — only these three ports need to be open:
-
-```bash
-sudo ufw allow OpenSSH && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw enable
-```
-
 Set `SITE_ADDRESS` to a domain and Caddy provisions TLS automatically. Leave it
-as `:80` for a bare IP.
+as `:80` for a bare IP — the dashboard is then plain HTTP on `http://YOUR_IP`.
+
+### Never run two live traders on one account
+
+The stack assumes it is the only thing trading its Alpaca account. Two live
+traders — a laptop and a server, or two servers — will both submit orders and
+both reconcile against a book neither one fully owns, which is precisely the
+divergence the HALT invariant exists to catch. When migrating from one host to
+another, stop the old one first.
+
+A second host running `TRADER_MODE=--dry-run` is safe (it places no orders), but
+expect its reconciliation to halt *itself* whenever the live host holds a
+position: the broker reports a position the dry-run host has no local record of,
+and halting on an unexplained divergence is the correct response. Point the
+second host at a different paper account if you want a clean board.
 
 ## Scheduled jobs
 
