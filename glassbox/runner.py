@@ -23,6 +23,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from glassbox import preflight
 from glassbox.audit import AuditLog
 from glassbox.clock import MARKET_TZ, now_utc
 from glassbox.config import load_config
@@ -206,12 +207,23 @@ class Runner:
         peak = max(float(self.store.get_state("peak_equity", "0") or 0), equity)
 
         now = now_utc().astimezone(MARKET_TZ)
-        open_at = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        close_at = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        # Session times come from the exchange calendar. Assuming 09:30-16:00
+        # is wrong on an early close by three hours, which would disable the
+        # end-of-session guard exactly when liquidity is worst.
+        session = self.data.session()
+        if session is not None:
+            since_open = session.minutes_since_open(now)
+            to_close = session.minutes_to_close(now)
+        else:
+            open_at = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            close_at = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            since_open = max(0, int((now - open_at).total_seconds() // 60))
+            to_close = max(0, int((close_at - now).total_seconds() // 60))
+
         return MarketState(
             is_open=bool(clock.is_open),
-            minutes_since_open=max(0, int((now - open_at).total_seconds() // 60)),
-            minutes_to_close=max(0, int((close_at - now).total_seconds() // 60)),
+            minutes_since_open=since_open,
+            minutes_to_close=to_close,
             equity=equity,
             daily_pnl_pct=100 * (equity - start) / start if start else 0.0,
             drawdown_pct=100 * (equity - peak) / peak if peak else 0.0,
@@ -302,6 +314,14 @@ class Runner:
             "trader_start",
             {"dry_run": self.dry_run, "universe_size": len(self.universe)},
         )
+
+        check = preflight.run(self.trading, self.data)
+        for line in check.checks:
+            print(line)
+        self.audit.append("preflight", check.as_dict())
+        if not check.ok:
+            print("preflight failed — refusing to start", file=sys.stderr)
+            return 2
 
         stream_thread = threading.Thread(target=self._run_stream, daemon=True)
         stream_thread.start()

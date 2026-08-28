@@ -334,6 +334,26 @@ class MarketData:
                 )
         return total
 
+    # -- corporate actions ------------------------------------------------
+    def corporate_events(self, symbol: str) -> list:
+        """Upcoming actions for a symbol, cached for an hour — the set does not
+        change minute to minute and this runs on every candidate signal."""
+        from glassbox.data.corporate import fetch_events
+
+        return self._cached(
+            ("corp", symbol), self.bar_ttl, lambda: fetch_events(self.trading_client, symbol)
+        )
+
+    def session(self):
+        """Exchange session times for today, or None when unavailable."""
+        from glassbox.data.calendar import fetch_session
+
+        return self._cached(
+            ("session", market_date()),
+            self.bar_ttl,
+            lambda: fetch_session(self.trading_client),
+        )
+
     # -- session ----------------------------------------------------------
     def kill_switch(self) -> bool:
         from glassbox.supervisor.guards import KILL_SWITCH_FILE

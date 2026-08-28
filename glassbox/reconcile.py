@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass, field
 
 HALT_KEY = "halt_reason"
+SEEN_ASSIGNMENTS_KEY = "seen_assignments"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,3 +104,40 @@ def enforce(store, audit, broker_positions) -> ReconcileResult:
 
 def is_halted(store) -> bool:
     return bool(store.get_state(HALT_KEY))
+
+
+def check_assignments(store, audit, activities) -> tuple[str, ...]:
+    """Halt on any newly seen option assignment.
+
+    An assignment is invisible to position reconciliation: the option is gone
+    from both our records and the broker's, so both agree — while we now hold
+    stock we never chose, without any of the defined-risk properties the gate
+    approved. There is no automated response that is obviously right here, so
+    the system stops and asks for a human.
+
+    Expirations are recorded but do not halt; a position expiring worthless is
+    the normal end of a trade, not a surprise.
+    """
+    assignments = [a for a in activities if getattr(a, "is_assignment", False)]
+    if not assignments:
+        return ()
+
+    seen = set(json.loads(store.get_state(SEEN_ASSIGNMENTS_KEY) or "[]"))
+    fresh = [a for a in assignments if f"{a.date}:{a.symbol}:{a.qty}" not in seen]
+    if not fresh:
+        return ()
+
+    seen.update(f"{a.date}:{a.symbol}:{a.qty}" for a in fresh)
+    store.set_state(SEEN_ASSIGNMENTS_KEY, json.dumps(sorted(seen)))
+
+    reason = "option assignment: " + ", ".join(str(a) for a in fresh)
+    store.set_state(HALT_KEY, reason)
+    audit.append(
+        "halt",
+        {
+            "source": "assignment",
+            "reason": reason,
+            "assignments": [{"symbol": a.symbol, "qty": a.qty, "date": a.date} for a in fresh],
+        },
+    )
+    return tuple(f"{a.symbol}" for a in fresh)

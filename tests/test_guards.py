@@ -87,3 +87,36 @@ def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
         action = supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
         assert action is GuardAction.HALT_HARD
     assert client.flattens == 3, "each tick flattens; the loop must not exit"
+
+
+# --- drawdown reference ---------------------------------------------------
+
+
+def test_broker_peak_survives_a_wiped_database(store):
+    """The max-drawdown guard measured from a locally held peak. Wiping the
+    database reset it to current equity, making drawdown read 0% and silently
+    disabling the guard until a new peak formed."""
+    from glassbox.supervisor.guards import update_peak_equity
+
+    # Fresh store: nothing known locally, but the broker remembers a higher mark.
+    peak = update_peak_equity(store, equity=94_000, broker_peak=110_000)
+    assert peak == 110_000
+
+    verdict = evaluate_guards(94_000, 100_000, peak, CFG)
+    assert verdict.action is GuardAction.HALT_HARD, (
+        "a 14% drawdown from the true peak must halt, even though local state had never seen it"
+    )
+
+
+def test_local_peak_wins_when_broker_history_is_unavailable(store):
+    from glassbox.supervisor.guards import update_peak_equity
+
+    update_peak_equity(store, 108_000)
+    assert update_peak_equity(store, 100_000, broker_peak=None) == 108_000
+
+
+def test_peak_never_decreases_from_a_lower_broker_value(store):
+    from glassbox.supervisor.guards import update_peak_equity
+
+    update_peak_equity(store, 120_000)
+    assert update_peak_equity(store, 100_000, broker_peak=105_000) == 120_000

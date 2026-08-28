@@ -61,6 +61,10 @@ class GateContext:
     orders_last_minute: int = 0
     new_positions_today: int = 0
     duplicate_open: bool = False
+    # --- corporate actions ------------------------------------------------
+    # None means "not checked". The gate treats that as a pass and says so,
+    # rather than silently implying the security was cleared.
+    corporate_blackout: object | None = None
 
     @property
     def total_max_loss(self) -> float:
@@ -269,6 +273,21 @@ def _check_rate_limits(ctx, cfg) -> CheckResult:
     )
 
 
+def _check_corporate_action(ctx, cfg) -> CheckResult:
+    """Refuse a position whose underlying is about to change under it.
+
+    A short call into an ex-dividend date is the ordinary way a defined-risk
+    spread becomes an unexpected stock position, and a split or merger changes
+    the deliverable so our max-loss arithmetic stops describing the trade.
+    """
+    blackout = ctx.corporate_blackout
+    if blackout is None:
+        return CheckResult("corporate_action", True, "not checked")
+    if getattr(blackout, "blocked", False):
+        return CheckResult("corporate_action", False, blackout.detail)
+    return CheckResult("corporate_action", True, blackout.detail or "clear")
+
+
 def _check_duplicate(ctx, cfg) -> CheckResult:
     if ctx.duplicate_open:
         return CheckResult("duplicate", False, "identical structure already open")
@@ -290,6 +309,7 @@ CHECKS: tuple[Callable, ...] = (
     _check_daily_loss,
     _check_drawdown,
     _check_rate_limits,
+    _check_corporate_action,
     _check_duplicate,
 )
 

@@ -88,11 +88,40 @@ def evaluate_guards(
     return GuardVerdict(GuardAction.CONTINUE, "within limits", daily_pnl_pct, drawdown_pct)
 
 
-def update_peak_equity(store, equity: float) -> float:
+def update_peak_equity(store, equity: float, broker_peak: float | None = None) -> float:
     """Peak equity ratchets up only — drawdown is measured from the high-water
-    mark, not from wherever the session happened to start."""
+    mark, not from wherever the session happened to start.
+
+    `broker_peak` comes from the account's own portfolio history and is folded
+    in because local state is not durable enough to hold this number. Wiping the
+    database — a fresh deploy, a `docker compose down -v` — would reset the peak
+    to current equity, making drawdown read 0% and silently disabling the guard
+    until a new peak formed. The broker remembers what we might not.
+    """
     peak = float(store.get_state(PEAK_EQUITY_KEY, "0") or 0)
-    if equity > peak:
-        store.set_state(PEAK_EQUITY_KEY, str(equity))
-        return equity
-    return peak
+    candidates = [peak, equity]
+    if broker_peak:
+        candidates.append(broker_peak)
+    highest = max(candidates)
+    if highest > peak:
+        store.set_state(PEAK_EQUITY_KEY, str(highest))
+    return highest
+
+
+def broker_peak_equity(trading_client, period: str = "1M") -> float | None:
+    """Highest equity the broker has recorded, or None if unavailable.
+
+    None rather than a default: an unavailable history must not be read as
+    "no drawdown", which is what a zero would mean downstream.
+    """
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+    try:
+        history = trading_client.get_portfolio_history(
+            GetPortfolioHistoryRequest(period=period, timeframe="1D")
+        )
+    except Exception:  # noqa: BLE001 -- unavailable history is not fatal; the
+        # locally tracked peak still applies.
+        return None
+    values = [float(v) for v in (getattr(history, "equity", None) or []) if v]
+    return max(values) if values else None

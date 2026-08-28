@@ -25,6 +25,7 @@ from glassbox.supervisor.guards import (
     KILL_SWITCH_FILE,
     SESSION_START_EQUITY_KEY,
     GuardAction,
+    broker_peak_equity,
     evaluate_guards,
     update_peak_equity,
 )
@@ -58,10 +59,28 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
     account = client.get_account()
     equity = float(account.equity)
 
+    # An assignment is invisible to position reconciliation — the option is gone
+    # from both sides, so both agree, while we now hold stock the gate never
+    # approved. This is the only place it surfaces.
+    try:
+        from glassbox import reconcile as _reconcile
+        from glassbox.config import require_env
+        from glassbox.data.activities import option_events
+
+        events = option_events(
+            require_env("ALPACA_API_KEY_ID"), require_env("ALPACA_API_SECRET_KEY")
+        )
+        assigned = _reconcile.check_assignments(store, audit, events)
+        if assigned:
+            print(f"ASSIGNMENT detected: {', '.join(assigned)} — halted", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 -- an unavailable activities feed must
+        # not stop the equity guards, which are the more important job.
+        audit.append("activity_check_error", {"error": f"{type(e).__name__}: {e}"})
+
     if not store.get_state(SESSION_START_EQUITY_KEY):
         store.set_state(SESSION_START_EQUITY_KEY, str(equity))
     session_start = float(store.get_state(SESSION_START_EQUITY_KEY))
-    peak = update_peak_equity(store, equity)
+    peak = update_peak_equity(store, equity, broker_peak_equity(client))
 
     verdict = evaluate_guards(
         equity=equity,

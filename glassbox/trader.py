@@ -242,6 +242,7 @@ class Trader:
             return self._drop("sizing", item, sizing.reason, signal_id=signal_id)
 
         # 7. the gate — deterministic, non-bypassable
+        blackout = self.corporate_blackout(item.symbol, structure, view.horizon_hours)
         ctx = GateContext(
             structure=structure,
             qty=sizing.qty,
@@ -264,6 +265,7 @@ class Trader:
             orders_last_minute=market.orders_last_minute,
             new_positions_today=market.new_positions_today,
             duplicate_open=self.has_duplicate(structure),
+            corporate_blackout=blackout,
         )
         decision = evaluate(ctx, self.cfg)
         self.audit.append(
@@ -351,6 +353,26 @@ class Trader:
             return eligible[0], "no bandit; edge test's first choice"
         choice = self.bandit.select(eligible, regime)
         return choice.kind, choice.detail
+
+    def corporate_blackout(self, symbol: str, structure, horizon_hours: float):
+        """Upcoming corporate actions for the underlying, or None if unchecked.
+
+        Returning None rather than an empty result matters: the gate reports
+        "not checked" instead of implying the security was cleared.
+        """
+        if not hasattr(self.data, "corporate_events"):
+            return None
+        from datetime import timedelta
+
+        from glassbox.data.corporate import blackout
+
+        try:
+            events = self.data.corporate_events(symbol)
+        except Exception:  # noqa: BLE001 -- an unavailable feed leaves the check
+            # unperformed and honestly labelled, rather than falsely passing.
+            return None
+        horizon_end = (self.clock() + timedelta(hours=horizon_hours)).date()
+        return blackout(events, horizon_end, is_credit=structure.is_credit)
 
     def meta_label(self, features, fallback: float) -> tuple[float, str]:
         """P(this signal is profitable). The meta-labeler abstains below its

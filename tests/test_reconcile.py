@@ -139,3 +139,64 @@ def test_migration_adds_columns_to_an_older_database(tmp_path):
     cols = {r["name"] for r in s._conn.execute("PRAGMA table_info(positions)")}
     assert {"peak_pnl", "exit_barrier", "meta_label", "horizon_hours"} <= cols
     s.close()
+
+
+# --- assignment detection -------------------------------------------------
+
+
+class FakeActivity:
+    def __init__(self, symbol, qty="1", day="2026-09-02", assignment=True):
+        self.symbol = symbol
+        self.qty = qty
+        self.date = day
+        self.is_assignment = assignment
+
+    def __str__(self):
+        return f"{self.symbol} {'assigned' if self.is_assignment else 'expired'}"
+
+
+def test_assignment_halts_trading(store, audit):
+    """An assignment is invisible to position reconciliation: the option is gone
+    from both sides, so both agree — while we now hold stock the gate never
+    approved."""
+    from glassbox.reconcile import check_assignments
+
+    assigned = check_assignments(store, audit, [FakeActivity("AAPL260918C00230000")])
+    assert assigned == ("AAPL260918C00230000",)
+    assert is_halted(store)
+    assert "assignment" in store.get_state("halt_reason")
+
+
+def test_expiration_does_not_halt(store, audit):
+    """A position expiring worthless is the normal end of a trade."""
+    from glassbox.reconcile import check_assignments
+
+    assert (
+        check_assignments(store, audit, [FakeActivity("SPY260903P00420000", assignment=False)])
+        == ()
+    )
+    assert not is_halted(store)
+
+
+def test_same_assignment_is_not_re_reported(store, audit):
+    """The supervisor polls every 15s; one event must halt once, not forever."""
+    from glassbox.reconcile import check_assignments
+
+    activity = FakeActivity("AAPL260918C00230000")
+    assert check_assignments(store, audit, [activity]) == ("AAPL260918C00230000",)
+    assert check_assignments(store, audit, [activity]) == ()
+
+
+def test_a_second_distinct_assignment_is_reported(store, audit):
+    from glassbox.reconcile import check_assignments
+
+    check_assignments(store, audit, [FakeActivity("AAPL260918C00230000")])
+    fresh = check_assignments(store, audit, [FakeActivity("MSFT260918C00400000")])
+    assert fresh == ("MSFT260918C00400000",)
+
+
+def test_no_activities_is_a_no_op(store, audit):
+    from glassbox.reconcile import check_assignments
+
+    assert check_assignments(store, audit, []) == ()
+    assert not is_halted(store)
