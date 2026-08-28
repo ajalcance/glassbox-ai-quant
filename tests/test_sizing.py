@@ -32,6 +32,35 @@ def test_sizing_respects_r_budget():
     assert r.qty * per_spread <= expected_budget
 
 
+def test_haircuts_apply_to_the_volatility_budget_too():
+    """Every haircut must bite whichever budget binds. Scaling only the
+    fixed-fractional side made the floor multiplier, macro proximity, heat and
+    drawdown tapers, and the loss-streak halving complete no-ops whenever the
+    vol budget was the smaller of the two — a floor trade would have carried
+    full organic size, which is exactly what the haircut exists to prevent."""
+    # High vol makes the vol budget bind: fixed_qty > vol_qty at full size.
+    full = size_position(100_000, 247.0, 0.90, CFG, underlying_vol=0.03)
+    assert full.vol_target_qty < full.fixed_fractional_qty, "vol budget must bind here"
+
+    halved = size_position(100_000, 247.0, 0.90, CFG, underlying_vol=0.03,
+                           context_multiplier=0.5)
+    assert halved.vol_target_qty < full.vol_target_qty, "haircut must reach the vol budget"
+    assert halved.qty < full.qty
+
+    streaked = size_position(100_000, 247.0, 0.90, CFG, underlying_vol=0.03,
+                             loss_streak=CFG.risk.loss_streak_half_size)
+    assert streaked.qty < full.qty, "a loss streak must shrink a vol-bound position"
+
+
+def test_target_vol_defaults_to_config_not_a_literal():
+    """The reference vol lives in config; a stale default here would silently
+    size every caller that omits the argument against the wrong number."""
+    explicit = size_position(100_000, 100.0, 0.90, CFG, underlying_vol=0.02,
+                             target_vol=CFG.sizing.target_daily_vol)
+    implied = size_position(100_000, 100.0, 0.90, CFG, underlying_vol=0.02)
+    assert implied.qty == explicit.qty and implied.vol_target_qty == explicit.vol_target_qty
+
+
 def test_smaller_of_two_budgets_wins():
     """High vol shrinks the position even when the R budget would allow more."""
     calm = size_position(100_000, 100, 0.90, CFG, underlying_vol=0.005)

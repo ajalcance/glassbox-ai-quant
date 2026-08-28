@@ -40,7 +40,7 @@ from glassbox.ml.metalabel import MetaLabeler
 from glassbox.reconcile import enforce, is_halted
 from glassbox.signal.filter import NewsFilter, NewsItem
 from glassbox.store import Store
-from glassbox.supervisor.guards import SESSION_START_EQUITY_KEY
+from glassbox.supervisor.guards import session_baseline
 from glassbox.trader import MarketState, Trader
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,9 +209,7 @@ class Runner:
         equity = float(account.equity)
         clock = self.data.clock()
 
-        if not self.store.get_state(SESSION_START_EQUITY_KEY):
-            self.store.set_state(SESSION_START_EQUITY_KEY, str(equity))
-        start = float(self.store.get_state(SESSION_START_EQUITY_KEY) or equity)
+        start = session_baseline(self.store, equity)
         peak = max(float(self.store.get_state("peak_equity", "0") or 0), equity)
 
         now = now_utc().astimezone(MARKET_TZ)

@@ -13,9 +13,6 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Stages in pipeline order. Used to render how far each signal travelled.
-STAGES = ("filter", "analyst", "market_data", "edge", "chain", "sizing", "gate", "executed")
-
 
 def read_records(audit_dir: str | Path, days: int = 3) -> list[dict]:
     """Most recent records, oldest first. Malformed lines are skipped, not

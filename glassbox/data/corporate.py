@@ -22,10 +22,6 @@ from datetime import date, timedelta
 
 from glassbox.clock import market_date, parse_expiry
 
-# Announcements are cached for a day: the set of upcoming corporate actions does
-# not change minute to minute, and this runs on every candidate signal.
-CACHE_TTL_SECONDS = 3600
-
 
 @dataclass(frozen=True, slots=True)
 class CorporateEvent:

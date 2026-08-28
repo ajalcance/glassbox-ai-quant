@@ -18,7 +18,6 @@ import sys
 from glassbox.config import load_config
 
 PROTOCOL = "2026-06-18"
-STARTUP_TIMEOUT = 180  # first run downloads the package via uvx
 
 
 def _env() -> dict:

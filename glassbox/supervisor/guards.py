@@ -22,7 +22,26 @@ from enum import StrEnum
 KILL_SWITCH_FILE = "data/KILL"
 PEAK_EQUITY_KEY = "peak_equity"
 SESSION_START_EQUITY_KEY = "session_start_equity"
-LOSS_STREAK_KEY = "loss_streak"
+SESSION_START_DATE_KEY = "session_start_date"
+
+
+def session_baseline(store, equity: float) -> float:
+    """Today's starting equity, resetting on the first tick of each market day.
+
+    The daily-loss guard is only *daily* if this baseline actually rolls over.
+    Written once and never cleared (the original behaviour), a Monday drawdown
+    permanently consumes Tuesday's loss budget and a Monday gain masks a
+    Tuesday loss — the guard silently becomes "loss since first boot". The
+    date is the market's, not the operator's: the operator is in a timezone
+    where the session spans two calendar days.
+    """
+    from glassbox.clock import market_date
+
+    today = market_date().isoformat()
+    if store.get_state(SESSION_START_DATE_KEY) != today:
+        store.set_state(SESSION_START_DATE_KEY, today)
+        store.set_state(SESSION_START_EQUITY_KEY, str(equity))
+    return float(store.get_state(SESSION_START_EQUITY_KEY) or equity)
 
 
 class GuardAction(StrEnum):

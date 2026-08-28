@@ -22,10 +22,6 @@ from glassbox.execution.breaker import CircuitBreaker
 from glassbox.structures import LegSide, Structure, assert_defined_risk, structure_key
 
 
-class OrderRejected(Exception):
-    """Broker refused the order — not retryable without changing something."""
-
-
 def _leg_requests(structure: Structure, closing: bool = False) -> list[OptionLegRequest]:
     """Map our legs to Alpaca leg requests. Closing inverts every side."""
     legs = []

@@ -7,7 +7,6 @@ much total risk is on, how directional is the book, and is it concentrated.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 
@@ -82,5 +81,3 @@ def correlated_exposure(
     return count
 
 
-def legs_from_row(row) -> list[dict]:
-    return json.loads(row["legs_json"])

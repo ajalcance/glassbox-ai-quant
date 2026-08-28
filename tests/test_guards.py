@@ -161,6 +161,33 @@ def test_flatten_incomplete_is_audited_not_silent(audit, monkeypatch):
     assert "flatten_incomplete" in text and "SPY260831C00772000" in text
 
 
+def test_daily_baseline_resets_on_a_new_market_day(store, monkeypatch):
+    """The daily-loss guard is only daily if its baseline rolls over. Written
+    once and never cleared, a Monday drawdown permanently consumes Tuesday's
+    budget and a Monday gain masks a Tuesday loss — the -2% halt silently
+    becomes 'loss since first boot' across a multi-day contest."""
+    from datetime import date
+
+    from glassbox.supervisor import guards
+
+    monkeypatch.setattr(guards, "market_date", lambda: date(2026, 8, 31), raising=False)
+    import glassbox.clock as clock_mod
+
+    monkeypatch.setattr(clock_mod, "market_date", lambda: date(2026, 8, 31))
+    assert guards.session_baseline(store, 100_000.0) == 100_000.0
+    # Same day, equity moved: the baseline must NOT follow it.
+    assert guards.session_baseline(store, 97_000.0) == 100_000.0
+
+    monkeypatch.setattr(clock_mod, "market_date", lambda: date(2026, 9, 1))
+    assert guards.session_baseline(store, 97_000.0) == 97_000.0, "new day, new baseline"
+    verdict = evaluate_guards(
+        equity=96_000.0, session_start_equity=97_000.0, peak_equity=100_000.0, cfg=CFG
+    )
+    assert verdict.daily_pnl_pct == pytest.approx(-1.03, abs=0.01), (
+        "day 2 loss must be measured from day 2's open, not day 1's"
+    )
+
+
 def test_kill_switch_lives_on_the_shared_data_volume(tmp_path):
     """The compose stack mounts one `state` volume at /app/data in every
     container and nothing mounts /app itself. A sentinel outside data/ would be

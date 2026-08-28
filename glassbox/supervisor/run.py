@@ -23,10 +23,10 @@ from glassbox.reconcile import HALT_KEY
 from glassbox.store import Store
 from glassbox.supervisor.guards import (
     KILL_SWITCH_FILE,
-    SESSION_START_EQUITY_KEY,
     GuardAction,
     broker_peak_equity,
     evaluate_guards,
+    session_baseline,
     update_peak_equity,
 )
 
@@ -113,9 +113,7 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
         # not stop the equity guards, which are the more important job.
         audit.append("activity_check_error", {"error": f"{type(e).__name__}: {e}"})
 
-    if not store.get_state(SESSION_START_EQUITY_KEY):
-        store.set_state(SESSION_START_EQUITY_KEY, str(equity))
-    session_start = float(store.get_state(SESSION_START_EQUITY_KEY))
+    session_start = session_baseline(store, equity)
     peak = update_peak_equity(store, equity, broker_peak_equity(client))
 
     verdict = evaluate_guards(

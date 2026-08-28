@@ -100,7 +100,7 @@ def size_position(
     meta_label_p: float,
     cfg,
     underlying_vol: float | None = None,
-    target_vol: float = 0.01,
+    target_vol: float | None = None,
     loss_streak: int = 0,
     context_multiplier: float = 1.0,
 ) -> SizingResult:
@@ -135,9 +135,23 @@ def size_position(
     fixed_qty = int(r_dollars // max_loss_per_spread)
 
     if underlying_vol and underlying_vol > 0:
-        vol_budget = equity * target_vol / underlying_vol * (cfg.risk.r_per_trade_pct / 100)
+        if target_vol is None:
+            target_vol = cfg.sizing.target_daily_vol
+        # Every haircut applies to BOTH budgets. They are alternative ways to
+        # answer "how much risk", but conviction, regime, macro proximity, heat,
+        # drawdown and the loss-streak halving are reasons to take *less* risk
+        # whichever budget happens to bind. Scaling only the fixed-fractional
+        # side made every one of them a no-op whenever the vol budget was
+        # smaller — a floor trade or a post-loss-streak entry would quietly
+        # carry full organic size, which is precisely what those haircuts exist
+        # to prevent.
+        haircut = r_dollars / (equity * (cfg.risk.r_per_trade_pct / 100))
+        vol_budget = (
+            equity * target_vol / underlying_vol * (cfg.risk.r_per_trade_pct / 100) * haircut
+        )
         vol_qty = int(vol_budget // max_loss_per_spread)
     else:
+        vol_budget = r_dollars
         vol_qty = fixed_qty  # no vol estimate: fall back rather than guess
 
     qty = min(fixed_qty, vol_qty)
