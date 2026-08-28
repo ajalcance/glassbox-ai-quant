@@ -37,7 +37,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design an
 
 - **Python 3.12** · alpaca-py · LightGBM · FastAPI (SSE) — backend
 - **Fireworks AI** — LLM analyst (structured JSON extraction) + nightly report writer
-- **React + Vite + TradingView lightweight-charts** — read-only dashboard
+- **React + Vite** — read-only dashboard (the reasoning layer, not a second broker UI)
 - **SQLite (WAL) + append-only JSONL audit log** — storage
 - **Docker Compose on a $12 DigitalOcean droplet** — deployment
 
@@ -50,6 +50,16 @@ uv run python -m glassbox.trader --dry-run
 ```
 
 Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.
+
+## The dashboard shows what Alpaca can't
+
+Alpaca's own dashboard already shows equity, positions, P&L and orders, so we
+don't rebuild any of it. GlassBox surfaces only what lives in the audit log:
+the news event and reasoning behind each decision, the **trades that were vetoed
+and never submitted** (which the broker has no record of), risk-budget
+utilization against our own caps, and the state of the learning components.
+
+*Alpaca shows what happened. GlassBox shows why — and what we deliberately didn't do.*
 
 ## What this deliberately does NOT include (and why)
 

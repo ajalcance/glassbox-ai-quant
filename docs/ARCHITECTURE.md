@@ -24,6 +24,7 @@ bull put spread · bear call spread · iron condor · call debit spread · put d
 droplet ── docker compose
   ├── trader      (pipeline layers 1–7, 9–10)
   ├── supervisor  (layer 8 — own Alpaca session, polls independently)
-  └── dashboard   (FastAPI + SSE + static React build, read-only)
+  └── dashboard   (FastAPI + SSE + static React build, read-only,
+  │                reasoning layer only — no broker-view duplication)
       └── Caddy (TLS) → public demo URL
 ```

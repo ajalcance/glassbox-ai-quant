@@ -37,7 +37,20 @@ Then: meta-labeler P(profit) sets size → bandit picks structure → risk gate 
 R = 0.5%/trade · max loss 1.5%/position, 3%/underlying · heat ≤ 6% · delta-dollars ±$15k · vega/gamma capped · daily loss −2% → halt · max DD −6% → halt · 4 straight losses → half size · p < 0.55 → no trade · flatten everything **Thu Sep 3 at close**.
 
 ## Dashboard (demo URL)
-Read-only React SPA (Vite + Tailwind + lightweight-charts) over FastAPI + SSE. Panels: equity curve, positions w/ Greeks, heat gauge, Greeks bands, **live decision feed with per-check gate PASS/VETO**, bandit posteriors, status strip, daily reports. Controls are CLI-only.
+Read-only React SPA (Vite + Tailwind) over FastAPI + SSE. Controls are CLI-only.
+
+**Scope rule: we do not rebuild what Alpaca already provides.** Its dashboard
+shows equity curve, positions, P&L and the order blotter; ours shows only what
+lives in our audit log and cannot exist on the broker's side — the *reasoning*
+layer. A permanent "View account on Alpaca" link frames the two as complementary.
+
+Panels: **decision feed** (news -> extraction -> edge test -> per-check gate
+PASS/VETO, the centerpiece) - **veto log** (trades never submitted, which the
+broker has no record of) - **risk budget** (heat vs our 6% cap, delta-dollars vs
+our band, R utilization) - **learning state** (bandit posteriors, meta-labeler
+P(profit)) - **system health** (websocket, circuit breaker, reconciliation,
+supervisor heartbeat, halt reason, audit-chain verified) - **P&L by bandit arm**
+(attribution, not raw equity) - nightly reports.
 
 ## Reporting
 Nightly cron after US close: P&L, trades, vetoes + reasons, risk utilization, learning deltas; Fireworks large model writes the narrative. One markdown/day → dashboard + social post seed; Thursday's report drafts the required one-pager.
