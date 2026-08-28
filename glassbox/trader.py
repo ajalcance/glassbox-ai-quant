@@ -818,11 +818,26 @@ class Trader:
         from glassbox.execution.ids import close_order_id
 
         structure = self._structure_from_row(row)
-        coid = close_order_id(view.position_id, str(decision.barrier))
+        # The attempt counter makes each retry after a dead close a fresh
+        # client_order_id — Alpaca never accepts a reused id, even from a
+        # canceled order, so resubmitting the same one would reject forever.
+        attempt = int(self.store.get_state(f"close_attempt:{view.position_id}") or 0)
+        coid = close_order_id(view.position_id, str(decision.barrier), attempt)
         self.store.upsert_position(view.position_id, status="closing")
         self.store.set_state(f"close_barrier:{view.position_id}", str(decision.barrier))
+        # The close limit is the NEGATION of the position's current value.
+        # Prices in this codebase are entry-oriented (positive = the spread's
+        # value to us), but Alpaca's MLEG limit is order-oriented: positive =
+        # net debit we pay, negative = net credit we must receive. Closing a
+        # debit spread means selling it, so a +2.47 value becomes a -2.47 limit
+        # ("pay me at least 2.47"); closing a credit spread means buying it
+        # back, so a -1.20 value becomes a +1.20 limit ("I'll pay up to 1.20").
+        # Submitting the entry-signed value instead made debit-spread closes
+        # uncontrolled market-chasers and credit-spread closes impossible —
+        # a limit demanding we RECEIVE money to buy back a short spread.
         self.router.submit_structure(
-            structure, view.qty, view.current_price, coid, view.position_id, closing=True
+            structure, view.qty, round(-view.current_price, 2), coid, view.position_id,
+            closing=True,
         )
 
     def feed_learners(self, row, label: int) -> None:

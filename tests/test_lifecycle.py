@@ -100,16 +100,70 @@ def close_and_settle(store, audit):
 
 
 def test_close_realises_pnl_from_the_actual_fill(store, audit):
+    """The close fill arrives in Alpaca's order-oriented sign (negative =
+    credit received), so realisation negates it back to entry orientation.
+    Anchored by a live observation: the Friday drill's debit spread bought at
+    +2.50 closed with a fill of -2.47, and the correct realised P&L is -$3 —
+    not the -$497 the naive (fill - entry) formula produces."""
     t, router = close_and_settle(store, audit)
     assert store.open_positions()[0]["status"] == "closing"
     settle(t)
     closed = store.training_rows()
     assert len(closed) == 1
     entry = router.submitted[0]["price"]
-    close = router.submitted[1]["price"]
-    expected = (close - entry) * 100 * closed[0]["qty"]
+    close_fill = router.submitted[1]["price"]  # stub fills at the submitted limit
+    expected = (-close_fill - entry) * 100 * closed[0]["qty"]
     assert float(closed[0]["realized_pnl"]) == pytest.approx(expected)
     assert closed[0]["exit_barrier"] == "deadline"
+
+
+def test_close_limit_is_order_oriented_not_entry_oriented(store, audit):
+    """Closing a debit spread means SELLING it: a position currently worth
+    +2.47 must be submitted with a -2.47 limit (net credit we must receive).
+    The entry-signed value would tell the broker we are willing to PAY to
+    exit a position that pays us — an uncontrolled market-chaser for debit
+    structures and an impossible order for credit ones."""
+    t, router, _ = open_via_pipeline(store, audit)
+    settle(t)  # entry fills
+    t.data.price = 2.47  # the spread is currently worth +2.47 to us
+    t.manage_positions(NOW + timedelta(hours=1), deadline=NOW)  # forced close
+    entry_order = router.submitted[0]
+    close_order = router.submitted[1]
+    assert not entry_order["closing"] and close_order["closing"]
+    assert entry_order["price"] > 0, "debit entry pays a positive premium"
+    assert close_order["price"] == pytest.approx(-2.47), "its close must demand a credit"
+
+
+def test_dead_close_reopens_the_position_for_retry(store, audit):
+    """A close that dies at the broker leaves orders_in_flight forever, so a
+    position stuck at 'closing' would be orphaned: the manager only walks
+    'open', meaning no barrier and no deadline flatten would ever touch it
+    again. Death must put it back in front of the manager, and the retry must
+    carry a fresh client_order_id — Alpaca never accepts a reused one."""
+
+    class CloseDies(StubRouter):
+        def poll(self, coid):
+            for record in self.submitted:
+                if record["coid"] == coid:
+                    if record["closing"]:
+                        return "expired", None  # day order died at the close
+                    return "filled", record["price"]
+            return "canceled", None
+
+    router = CloseDies(store)
+    t, _, _ = open_via_pipeline(store, audit, router=router)
+    settle(t)  # entry fills
+    t.manage_positions(NOW + timedelta(hours=1), deadline=NOW)  # submits close
+    first_close = router.submitted[-1]
+    events = settle(t)  # close comes back dead
+    assert any("reopened" in e for e in events)
+    row = store.open_positions()[0]
+    assert row["status"] == "open", "a dead close must not orphan the position"
+
+    t.manage_positions(NOW + timedelta(hours=2), deadline=NOW)  # manager retries
+    second_close = router.submitted[-1]
+    assert second_close["closing"]
+    assert second_close["coid"] != first_close["coid"], "retry must mint a new id"
 
 
 def test_settled_close_rewards_the_bandit(store, audit):

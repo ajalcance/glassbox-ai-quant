@@ -91,11 +91,20 @@ def _on_fill(trader, order, fill: float | None, now: datetime) -> str:
         )
         return f"FILLED {row['underlying']} at {fill}"
 
-    # A close fill realises the position.
+    # A close fill realises the position. The fill arrives in Alpaca's
+    # order-oriented sign (positive = we paid, negative = we received), while
+    # entry_price is entry-oriented (positive = value we bought). Negating the
+    # fill converts it to "what we received for the position", so one formula
+    # covers both directions: a debit spread bought at +2.50 whose close fills
+    # at -2.47 realises (2.47 - 2.50) = -0.03/share; a credit spread sold at
+    # -1.20 whose buy-back fills at +0.60 realises (-0.60 - (-1.20)) = +0.60.
+    # The -2.47 case is not hypothetical — it is the fill the Friday drill
+    # observed live, which the previous (fill - entry) formula would have
+    # booked as a $497 loss on a $3 trade.
     entry = float(row["entry_price"] or 0.0)
     realized = None
     if fill is not None:
-        realized = (fill - entry) * 100 * int(row["qty"])
+        realized = (-fill - entry) * 100 * int(row["qty"])
     barrier = trader.store.get_state(f"close_barrier:{position_id}") or str(Barrier.TIME)
     label = 1 if (realized or 0) > 0 else 0
     trader.store.close_position(
@@ -133,10 +142,22 @@ def _on_dead(trader, order, status: str) -> str:
         return f"entry {status}: {row['underlying']}"
 
     if order["intent"] == "close" and row["status"] == "closing":
-        # The close died; the position is still on. Escalate immediately next
-        # tick by clearing the attempt marker's timestamp.
-        trader.audit.append("close_dead", {"position_id": position_id, "order_status": status})
-        return f"close {status}: {row['underlying']} — will escalate"
+        # The close died at the broker (canceled / rejected / day-expired) and
+        # this order has just left orders_in_flight, so escalation can never
+        # see it again. Left at "closing" the position would be orphaned:
+        # manage_positions only walks "open", so no barrier, no deadline
+        # flatten, nothing would ever try to exit it again. Reverting to
+        # "open" puts it back in front of the manager, which re-closes it next
+        # tick — with a fresh client_order_id, because the bumped attempt
+        # counter feeds the coid and Alpaca never accepts a reused id.
+        attempt = int(trader.store.get_state(f"close_attempt:{position_id}") or 0)
+        trader.store.set_state(f"close_attempt:{position_id}", str(attempt + 1))
+        trader.store.upsert_position(position_id, status="open")
+        trader.audit.append(
+            "close_dead",
+            {"position_id": position_id, "order_status": status, "next_attempt": attempt + 1},
+        )
+        return f"close {status}: {row['underlying']} — reopened for retry"
     return ""
 
 
