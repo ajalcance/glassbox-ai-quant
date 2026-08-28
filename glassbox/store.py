@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS positions (
     max_loss      REAL NOT NULL,
     status        TEXT NOT NULL,        -- opening | open | closing | closed
     horizon_hours REAL,
+    regime        TEXT,
+    features_json TEXT,
     peak_pnl      REAL NOT NULL DEFAULT 0,
     exit_barrier  TEXT,
     meta_label    INTEGER,
@@ -44,6 +46,16 @@ CREATE TABLE IF NOT EXISTS positions (
     closed_at     TEXT,
     exit_reason   TEXT,
     realized_pnl  REAL
+);
+
+CREATE TABLE IF NOT EXISTS bandit_state (
+    arm        TEXT NOT NULL,
+    regime     TEXT NOT NULL,
+    alpha      REAL NOT NULL DEFAULT 1.0,
+    beta       REAL NOT NULL DEFAULT 1.0,
+    pulls      INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (arm, regime)
 );
 
 CREATE TABLE IF NOT EXISTS system_state (
@@ -82,6 +94,8 @@ class Store:
         wanted = {
             "positions": {
                 "horizon_hours": "REAL",
+                "regime": "TEXT",
+                "features_json": "TEXT",
                 "peak_pnl": "REAL NOT NULL DEFAULT 0",
                 "exit_barrier": "TEXT",
                 "meta_label": "INTEGER",
@@ -192,6 +206,30 @@ class Store:
         return self._conn.execute(
             "SELECT * FROM positions WHERE status='closed' AND meta_label IS NOT NULL"
         ).fetchall()
+
+    # ---- bandit -----------------------------------------------------------
+    def bandit_posteriors(self, regime: str) -> dict[str, tuple[float, float, int]]:
+        rows = self._conn.execute(
+            "SELECT arm, alpha, beta, pulls FROM bandit_state WHERE regime=?", (regime,)
+        ).fetchall()
+        return {r["arm"]: (r["alpha"], r["beta"], r["pulls"]) for r in rows}
+
+    def update_bandit(self, arm: str, regime: str, won: bool) -> None:
+        """One Bernoulli observation. Alpha counts wins, beta counts losses."""
+        self._conn.execute(
+            "INSERT INTO bandit_state (arm, regime, alpha, beta, pulls, updated_at) "
+            "VALUES (?,?,1.0,1.0,0,?) ON CONFLICT(arm, regime) DO NOTHING",
+            (arm, regime, _now()),
+        )
+        column = "alpha" if won else "beta"
+        self._conn.execute(
+            f"UPDATE bandit_state SET {column}={column}+1, pulls=pulls+1, updated_at=? "
+            "WHERE arm=? AND regime=?",
+            (_now(), arm, regime),
+        )
+
+    def all_bandit_state(self) -> list[sqlite3.Row]:
+        return self._conn.execute("SELECT * FROM bandit_state ORDER BY regime, arm").fetchall()
 
     def open_positions(self) -> list[sqlite3.Row]:
         cur = self._conn.execute(

@@ -34,6 +34,8 @@ from glassbox.data.alpaca_client import (
 )
 from glassbox.data.market import MarketData
 from glassbox.execution.router import OrderRouter
+from glassbox.ml.bandit import ThompsonBandit
+from glassbox.ml.metalabel import MetaLabeler
 from glassbox.reconcile import enforce, is_halted
 from glassbox.signal.filter import NewsFilter, NewsItem
 from glassbox.store import Store
@@ -151,6 +153,17 @@ class Runner:
             if dry_run
             else OrderRouter(self.trading, self.store, self.audit)
         )
+        models = Path(cfg.paths.models_dir)
+        # A missing or stale model is not an error — it means abstain, and the
+        # pipeline falls back to the analyst's own confidence.
+        self.meta_labeler = MetaLabeler.load(
+            models / "metalabel.pkl", min_samples=cfg.ml.min_training_samples
+        )
+        self.bandit = ThompsonBandit(
+            self.store,
+            prior_alpha=cfg.ml.bandit_prior_alpha,
+            prior_beta=cfg.ml.bandit_prior_beta,
+        )
         self.universe = build_universe(cfg)
         self.trader = Trader(
             cfg=cfg,
@@ -161,6 +174,8 @@ class Runner:
             llm=self._llm(),
             market_data=self.data,
             clock=now_utc,
+            meta_labeler=self.meta_labeler,
+            bandit=self.bandit,
         )
         self._seen_news: set[str] = set()
         self._deadline = self._parse_deadline(cfg.manage.flatten_all_at)
@@ -271,6 +286,17 @@ class Runner:
         mode = "DRY RUN (no orders)" if self.dry_run else "LIVE (paper account)"
         print(f"GlassBox trader starting — {mode}")
         print(f"  universe: {len(self.universe)} symbols")
+        print(
+            "  meta-labeler: "
+            + (
+                f"trained on {self.meta_labeler.n_samples} outcomes"
+                if self.meta_labeler.is_trained
+                else f"abstaining ({self.meta_labeler.n_samples}/"
+                f"{self.cfg.ml.min_training_samples} samples) — using analyst confidence"
+            )
+        )
+        arms = self.bandit.summary()
+        print(f"  bandit: {len(arms)} arm/regime cells with history")
         print(f"  deadline: {self._deadline}")
         self.audit.append(
             "trader_start",

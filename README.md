@@ -35,7 +35,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design an
 
 ## Stack
 
-- **Python 3.12** · alpaca-py · LightGBM · FastAPI (SSE) — backend
+- **Python 3.12** · alpaca-py · scikit-learn · FastAPI (SSE) — backend
 - **Fireworks AI** — LLM analyst (structured JSON extraction) + nightly report writer
 - **React + Vite** — read-only dashboard (the reasoning layer, not a second broker UI)
 - **SQLite (WAL) + append-only JSONL audit log** — storage

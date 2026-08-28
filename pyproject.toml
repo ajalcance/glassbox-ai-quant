@@ -12,6 +12,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",
     "openai>=1.50",          # OpenAI-compatible client for Fireworks
+    "numpy>=2.0",
+    "scikit-learn>=1.5",
 ]
 
 [dependency-groups]

@@ -86,6 +86,13 @@ class DashboardCfg(BaseModel):
     host: str
 
 
+class MlCfg(BaseModel):
+    min_training_samples: int
+    bandit_prior_alpha: float
+    bandit_prior_beta: float
+    vol_regime_bounds: list[float]
+
+
 class PathsCfg(BaseModel):
     db: str
     audit_dir: str
@@ -102,6 +109,7 @@ class Config(BaseModel):
     universe: UniverseCfg
     llm: LlmCfg
     dashboard: DashboardCfg
+    ml: MlCfg
     paths: PathsCfg
 
 

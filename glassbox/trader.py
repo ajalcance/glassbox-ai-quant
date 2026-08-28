@@ -13,6 +13,7 @@ record of what we chose *not* to do — the most informative artifact we produce
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -27,6 +28,8 @@ from glassbox.execution.ids import client_order_id
 from glassbox.gate import GateContext, evaluate
 from glassbox.llm import LlmSchemaError, LlmUnavailableError
 from glassbox.manage import Action, PositionView, evaluate_position
+from glassbox.ml.bandit import classify_regime
+from glassbox.ml.features import build_features
 from glassbox.portfolio import snapshot
 from glassbox.reconcile import is_halted
 from glassbox.signal.analyst import analyse
@@ -71,7 +74,18 @@ class Outcome:
 
 class Trader:
     def __init__(
-        self, *, cfg, store, audit: AuditLog, router, news_filter, llm, market_data, clock
+        self,
+        *,
+        cfg,
+        store,
+        audit: AuditLog,
+        router,
+        news_filter,
+        llm,
+        market_data,
+        clock,
+        meta_labeler=None,
+        bandit=None,
     ):
         self.cfg = cfg
         self.store = store
@@ -81,6 +95,10 @@ class Trader:
         self.llm = llm
         self.data = market_data  # supplies spot, chain, correlations
         self.clock = clock  # callable -> aware datetime
+        # Both optional. Absent, the hooks fall back to honest stand-ins rather
+        # than inventing numbers — see meta_label() and select_structure().
+        self.meta_labeler = meta_labeler
+        self.bandit = bandit
 
     # -- helpers ----------------------------------------------------------
     def _drop(self, stage: str, item: NewsItem, reason: str, **extra) -> Outcome:
@@ -177,7 +195,9 @@ class Trader:
             return Outcome("edge", False, edge.detail, signal_id)
 
         # 5. express the view in a defined-risk structure
-        kind = self.select_structure(edge.eligible_structures)
+        realized_vol = self.data.realized_vol(item.symbol)
+        regime = classify_regime(realized_vol, self.cfg.ml.vol_regime_bounds)
+        kind, arm_detail = self.select_structure(edge.eligible_structures, regime)
         try:
             structure, net_price = build_structure(
                 kind, chain, spot, view.expected_move_pct, item.symbol
@@ -187,24 +207,46 @@ class Trader:
             return self._drop("chain", item, f"{type(e).__name__}: {e}", signal_id=signal_id)
 
         # 6. sizing — models influence size, never limits
+        spread_pct, oi = structure_liquidity(structure, chain)
+        features = build_features(
+            view=view,
+            edge=edge,
+            hours_to_expiry=hours_to_expiry,
+            realized_vol=realized_vol,
+            spread_pct_of_mid=spread_pct,
+            is_credit=structure.is_credit,
+            novelty=verdict.novelty,
+        )
+        p, label_detail = self.meta_label(features, view.confidence)
         sizing = size_position(
             equity=market.equity,
             max_loss_per_spread=risk,
-            meta_label_p=self.meta_label(view, edge),
+            meta_label_p=p,
             cfg=self.cfg,
-            underlying_vol=self.data.realized_vol(item.symbol),
+            underlying_vol=realized_vol,
             loss_streak=market.loss_streak,
+        )
+        self.audit.append(
+            "ml",
+            {
+                "signal_id": signal_id,
+                "regime": str(regime),
+                "arm": str(kind),
+                "arm_detail": arm_detail,
+                "meta_label_p": p,
+                "meta_label_detail": label_detail,
+                "features": features.as_dict(),
+            },
         )
         if not sizing.approved:
             return self._drop("sizing", item, sizing.reason, signal_id=signal_id)
 
         # 7. the gate — deterministic, non-bypassable
-        spread_pct, oi = structure_liquidity(structure, chain)
         ctx = GateContext(
             structure=structure,
             qty=sizing.qty,
             max_loss_per_spread=risk,
-            meta_label_p=self.meta_label(view, edge),
+            meta_label_p=p,
             equity=market.equity,
             daily_pnl_pct=market.daily_pnl_pct,
             drawdown_pct=market.drawdown_pct,
@@ -302,15 +344,21 @@ class Trader:
         self.store.set_state("trader_heartbeat", self.clock().isoformat())
 
     # -- overridable hooks (the ML layer plugs in here) -------------------
-    def select_structure(self, eligible):
-        """Which structure to use. The bandit replaces this; until it has
-        posteriors, the edge test's first choice is used."""
-        return eligible[0]
+    def select_structure(self, eligible, regime=None):
+        """Which structure expresses the view. Thompson sampling when a bandit
+        is attached, otherwise the edge test's first choice."""
+        if self.bandit is None or regime is None:
+            return eligible[0], "no bandit; edge test's first choice"
+        choice = self.bandit.select(eligible, regime)
+        return choice.kind, choice.detail
 
-    def meta_label(self, view, edge) -> float:
-        """P(this signal is profitable). The meta-labeler replaces this; until
-        it is trained, the analyst's own confidence is the honest stand-in."""
-        return view.confidence
+    def meta_label(self, features, fallback: float) -> tuple[float, str]:
+        """P(this signal is profitable). The meta-labeler abstains below its
+        minimum sample count, in which case the analyst's own confidence is
+        used — a number we actually have rather than one we made up."""
+        if self.meta_labeler is None:
+            return fallback, "no meta-labeler; using analyst confidence"
+        return self.meta_labeler.predict(features, fallback)
 
     # -- internals --------------------------------------------------------
     def has_duplicate(self, structure) -> bool:
@@ -323,14 +371,12 @@ class Trader:
 
     @staticmethod
     def _legs_json(structure) -> str:
-        import json
 
         from glassbox.execution.router import legs_as_dicts
 
         return json.dumps(legs_as_dicts(structure))
 
     def _structure_from_row(self, row):
-        import json
         from datetime import date as _date
 
         from glassbox.structures import Leg, LegSide, Right, Structure, StructureKind

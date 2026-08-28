@@ -324,11 +324,12 @@ def test_heartbeat_is_written_for_the_supervisor(store, audit):
 
 
 def test_meta_label_defaults_to_analyst_confidence(store, audit):
-    """Until the meta-labeler is trained, the honest stand-in is the analyst's
-    own confidence — not an invented number."""
+    """With no meta-labeler attached, the honest stand-in is the analyst's own
+    confidence — a number we actually have, not an invented one."""
     t = make_trader(store, audit)
-    view = StubLlm().view
-    assert t.meta_label(view, None) == pytest.approx(view.confidence)
+    p, detail = t.meta_label(features=None, fallback=0.85)
+    assert p == pytest.approx(0.85)
+    assert "no meta-labeler" in detail
 
 
 def test_structure_selection_is_overridable(store, audit):
@@ -336,8 +337,8 @@ def test_structure_selection_is_overridable(store, audit):
     from glassbox.structures import StructureKind
 
     class BanditTrader(Trader):
-        def select_structure(self, eligible):
-            return eligible[-1]
+        def select_structure(self, eligible, regime=None):
+            return eligible[-1], "overridden"
 
     t = BanditTrader(
         cfg=CFG,
@@ -349,7 +350,8 @@ def test_structure_selection_is_overridable(store, audit):
         market_data=StubData(),
         clock=lambda: NOW,
     )
-    assert t.select_structure([StructureKind.IRON_CONDOR]) is StructureKind.IRON_CONDOR
+    kind, detail = t.select_structure([StructureKind.IRON_CONDOR])
+    assert kind is StructureKind.IRON_CONDOR and detail == "overridden"
 
 
 def test_closed_market_skips_the_model_entirely(store, audit):

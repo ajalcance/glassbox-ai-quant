@@ -1,0 +1,17 @@
+{
+  "n_samples": 0,
+  "trained": false,
+  "feature_order": [
+    "confidence",
+    "expected_move_pct",
+    "implied_move_pct",
+    "edge_ratio",
+    "materiality",
+    "novelty",
+    "hours_to_expiry",
+    "realized_vol",
+    "spread_pct_of_mid",
+    "is_credit"
+  ],
+  "trained_at": null
+}

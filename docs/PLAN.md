@@ -28,7 +28,7 @@ Then: meta-labeler P(profit) sets size → bandit picks structure → risk gate 
 
 | Component | Method | Why |
 |---|---|---|
-| Meta-labeler | LightGBM on triple-barrier outcomes of own trades | Learns from past entries; converges on hundreds of rows |
+| Meta-labeler | Regularised logistic regression on triple-barrier outcomes of own trades | Learns from past entries, and abstains below 30 — a boosted ensemble on forty rows is noise fitted with conviction |
 | Structure selector | Thompson-sampling bandit, 6 defined-risk arms, warm-started from news-history replay | Correct RL class for tens-of-pulls sample sizes |
 | Vol forecaster | HAR-RV, pretrained offline, frozen | Vol is forecastable; returns aren't. Feeds the edge test |
 

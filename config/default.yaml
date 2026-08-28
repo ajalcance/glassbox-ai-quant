@@ -76,6 +76,20 @@ dashboard:
   port: 8847
   host: "127.0.0.1"
 
+ml:
+  # A gradient-boosted model fitted on a handful of trades is noise with a
+  # confidence interval. Below this many labelled outcomes the meta-labeler
+  # abstains and the analyst's own confidence is used instead — an honest
+  # stand-in beats a fabricated one.
+  min_training_samples: 30
+  # Thompson sampling priors. Beta(1,1) is uniform: every structure starts
+  # equally plausible and has to earn its share of the flow.
+  bandit_prior_alpha: 1.0
+  bandit_prior_beta: 1.0
+  # Coarse regime buckets keep the number of cells small enough to actually
+  # learn from tens of observations rather than thousands.
+  vol_regime_bounds: [0.010, 0.020]
+
 paths:
   db: "data/glassbox.db"
   audit_dir: "audit"

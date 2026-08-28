@@ -8,6 +8,10 @@ glassbox/
   data/        # market data + news clients, point-in-time DecisionContext
   signal/      # filter → LLM analyst → edge test
   ml/          # meta-labeler, bandit, vol forecaster (inference only in prod)
+               #   metalabel.py  regularised logistic regression, abstains < 30 samples
+               #   bandit.py     Thompson sampling over defined-risk structures
+               #   volforecast.py HAR-RV, trained offline and frozen
+               #   train.py      offline training entrypoint
   gate.py      # THE risk gate — pure function, 13 ordered checks
   sizing.py    # R-based sizing ∧ vol target, take the min
   execution/   # order builder, mleg submission, repricing ladder, circuit breaker
@@ -28,3 +32,9 @@ glassbox/
 - Errors in the trading loop never crash the process: catch, log to audit, continue or HALT — chosen explicitly, never implicitly.
 - Log the *decision not to trade* with the same fidelity as trades. Vetoes are data.
 - Tests: property tests for the gate (hypothesis), chaos tests for execution (injected 500s/timeouts), fixture-replay tests for the signal pipeline.
+
+## ML rules
+- **Models set selection and sizing; they never set limits.** A model failure must degrade to a smaller position, never to a different risk posture.
+- **Abstention is a first-class answer.** Below `ml.min_training_samples` the meta-labeler returns the analyst's confidence and says so. A missing, corrupt, or feature-mismatched model file also abstains — it must never take the trader down at the open.
+- **Model class is chosen for the sample size**, not for sophistication. Tens of labelled trades means regularised logistic regression, not gradient boosting; discrete-arm Thompson sampling, not policy gradient.
+- The volatility model is trained offline on data ending before the contest and frozen. Never retrain it on days being traded.
