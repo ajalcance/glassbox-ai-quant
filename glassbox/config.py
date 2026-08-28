@@ -37,6 +37,10 @@ class RiskCfg(BaseModel):
 class SizingCfg(BaseModel):
     meta_multiplier_floor: float
     meta_multiplier_ceiling: float
+    heat_taper_start: float
+    heat_taper_floor: float
+    drawdown_taper_start: float
+    drawdown_taper_floor: float
 
 
 class GateCfg(BaseModel):

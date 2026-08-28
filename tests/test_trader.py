@@ -634,3 +634,36 @@ def test_failed_floor_attempt_backs_off_before_retrying(store, audit):
     t.data._kill = False
     retried = t.maybe_floor_trade(market())
     assert retried is not None and retried.traded
+
+
+def test_heat_taper_appears_in_the_sizing_record(store, audit):
+    """A near-full book must shrink new positions, and say so."""
+    import json as _json
+
+    from glassbox.config import load_config as _load
+
+    cfg = _load()
+    cap = 100_000.0 * cfg.risk.portfolio_heat_pct / 100
+    store.upsert_position(
+        "pos-hot",
+        underlying="QQQ",
+        kind="bull_put_spread",
+        legs_json="[]",
+        qty=1,
+        max_loss=cap * 0.9,
+        status="open",
+        opened_at=NOW.isoformat(),
+    )
+    t = make_trader(store, audit)
+    t.process_news(news(), market())
+    ml = [r for r in _audit_records(audit) if r["kind"] == "ml"]
+    assert ml and "heat" in ml[-1]["context_detail"]
+    assert ml[-1]["context_multiplier"] < 1.0
+    assert _json
+
+
+def test_losing_day_shrinks_new_positions(store, audit):
+    t = make_trader(store, audit)
+    t.process_news(news(), market(daily_pnl_pct=-1.8))
+    ml = [r for r in _audit_records(audit) if r["kind"] == "ml"]
+    assert ml and "drawdown" in ml[-1]["context_detail"]

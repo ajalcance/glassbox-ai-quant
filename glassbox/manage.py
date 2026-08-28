@@ -24,6 +24,17 @@ regardless of where P&L happens to be:
     gate refuses to *open* one into an event; permitting the *hold* would guard
     the front door and leave the back one open.
 
+**Position size never changes once opened.** The manager is deliberately binary:
+a position is held whole or closed whole. Scaling out would be the obvious
+addition and it is not available to us — at a 0.5% risk budget a typical spread
+is one contract, and half a contract does not exist. Scaling in is available but
+declined: adding to an open thesis raises risk on a view already in the market,
+which the failure literature identifies as a principal way retail systems end.
+
+Risk on an open position is therefore reduced through **exits, not size** — the
+break-even stop, and the obligation barriers below. Size adapts before entry
+instead, through the budget tapers in `sizing.py`.
+
 This is a pure function. No broker calls, no clock reads — `now` is passed in.
 """
 

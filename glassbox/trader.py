@@ -35,7 +35,7 @@ from glassbox.reconcile import is_halted
 from glassbox.signal.analyst import analyse
 from glassbox.signal.edge import evaluate_edge
 from glassbox.signal.filter import NewsItem
-from glassbox.sizing import size_position
+from glassbox.sizing import drawdown_taper, heat_taper, size_position
 from glassbox.structures import (
     ImplausiblePricingError,
     UndefinedRiskError,
@@ -316,6 +316,17 @@ class Trader:
         if macro_window is not None and macro_window.active:
             context_mult *= self.cfg.macro.near_event_size_factor
             context_parts.append(f"macro {self.cfg.macro.near_event_size_factor:.2f}x")
+        # Budget tapers: approaching a limit should mean smaller bites, not
+        # identical ones until the gate slams shut.
+        portfolio = snapshot(self.store)
+        heat_mult = heat_taper(portfolio.heat, market.equity, self.cfg)
+        if heat_mult < 1.0:
+            context_mult *= heat_mult
+            context_parts.append(f"heat {heat_mult:.2f}x")
+        dd_mult = drawdown_taper(market.daily_pnl_pct, self.cfg)
+        if dd_mult < 1.0:
+            context_mult *= dd_mult
+            context_parts.append(f"drawdown {dd_mult:.2f}x")
         if getattr(self, "_floor_mode", False):
             # A floor trade is a best idea below the organic bar; it never
             # carries organic conviction, so it never carries organic size.
@@ -364,7 +375,7 @@ class Trader:
             horizon_hours=view.horizon_hours,
             halted=is_halted(self.store),
             kill_switch=self.data.kill_switch(),
-            portfolio=snapshot(self.store),
+            portfolio=portfolio,
             post_trade_greeks=self.data.post_trade_greeks(structure, sizing.qty),
             correlations=self.data.correlations(),
             spread_pct_of_mid=spread_pct,

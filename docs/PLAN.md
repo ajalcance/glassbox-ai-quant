@@ -32,6 +32,21 @@ Then: meta-labeler P(profit) sets size → bandit picks structure → risk gate 
 | Structure selector | Thompson-sampling bandit, 6 defined-risk arms, warm-started from news-history replay | Correct RL class for tens-of-pulls sample sizes |
 | Vol forecaster | HAR-RV, pretrained offline, frozen | Vol is forecastable; returns aren't. Feeds the edge test |
 
+## Position sizing over a position's life
+
+Size is set at entry and never changes: the manager holds whole or closes whole.
+Scaling out is not a design choice we declined but one unavailable to us — at a
+0.5% risk budget a typical spread is a single contract. Scaling in is declined
+deliberately, since adding to an open thesis raises risk on a view already in
+the market.
+
+Adaptation therefore happens *before* entry rather than during. Each new
+position is sized through a multiplicative chain where every factor can shrink
+and none can inflate: meta-label confidence, market regime, macro proximity,
+portfolio heat, and daily drawdown. The last two turn hard limits into
+gradients — previously a book at 5.9% of a 6% heat cap took a full-size position
+and one at 6.1% took none, which is a tripwire rather than risk management.
+
 ## Risk numbers (per $100k, all in config)
 
 R = 0.5%/trade · max loss 1.5%/position, 3%/underlying · heat ≤ 6% · delta-dollars ±$15k · vega/gamma capped · daily loss −2% → halt · max DD −6% → halt · 4 straight losses → half size · p < 0.55 → no trade · flatten everything **Thu Sep 3 at close**.

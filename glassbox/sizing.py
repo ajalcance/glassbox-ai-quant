@@ -32,6 +32,49 @@ class SizingResult:
         return self.qty > 0
 
 
+def _taper(utilisation: float, start: float, floor: float) -> float:
+    """Linear taper from 1.0 to `floor` as utilisation runs from `start` to 1.
+
+    Shared by both budget tapers. Below `start` nothing changes; at or beyond
+    the limit the floor applies. Never returns more than 1.0 — a budget with
+    room to spare is not a reason to take a larger position than the rules
+    already permit.
+    """
+    if utilisation <= start or start >= 1.0:
+        return 1.0
+    span = (min(utilisation, 1.0) - start) / (1.0 - start)
+    return max(floor, 1.0 - (1.0 - floor) * span)
+
+
+def heat_taper(current_heat: float, equity: float, cfg) -> float:
+    """Shrink new positions as portfolio heat approaches its cap.
+
+    Without this the cap is a tripwire: full conviction at 5.9% of a 6% budget
+    and nothing at all at 6.1%. The gate's hard veto remains the backstop; this
+    decides how gracefully we arrive at it.
+    """
+    cap = equity * (cfg.risk.portfolio_heat_pct / 100)
+    if cap <= 0:
+        return 1.0
+    return _taper(current_heat / cap, cfg.sizing.heat_taper_start, cfg.sizing.heat_taper_floor)
+
+
+def drawdown_taper(daily_pnl_pct: float, cfg) -> float:
+    """Shrink new positions as the day's loss approaches the halt.
+
+    Same reasoning as heat, on the other axis. A day that is most of the way to
+    its stop should be risking less per idea, not the same until it stops.
+    """
+    limit = cfg.risk.daily_loss_halt_pct
+    if limit <= 0 or daily_pnl_pct >= 0:
+        return 1.0
+    return _taper(
+        abs(daily_pnl_pct) / limit,
+        cfg.sizing.drawdown_taper_start,
+        cfg.sizing.drawdown_taper_floor,
+    )
+
+
 def meta_multiplier(p: float, cfg) -> float:
     """Map P(profitable) to a size multiplier.
 

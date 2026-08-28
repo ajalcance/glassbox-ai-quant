@@ -17,6 +17,15 @@ risk:
   min_meta_label_p: 0.55         # below this, no trade
 
 sizing:
+  # Risk limits are backstops, not operating points. A portfolio approaching its
+  # budget should take smaller bites, not identical ones until it hits a wall.
+  # Below the start fraction nothing changes; between there and the cap the
+  # multiplier tapers linearly to the floor. The gate's hard veto still stands
+  # behind both — these only decide how gracefully we arrive at it.
+  heat_taper_start: 0.6      # fraction of the heat cap where tapering begins
+  heat_taper_floor: 0.3
+  drawdown_taper_start: 0.5  # fraction of the daily-loss limit
+  drawdown_taper_floor: 0.3
   meta_multiplier_floor: 0.4     # multiplier at p = min_meta_label_p
   meta_multiplier_ceiling: 1.0   # multiplier at p >= 0.85
 
