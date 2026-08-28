@@ -72,6 +72,24 @@ class SignalCfg(BaseModel):
     vrp_min_for_credit: float
 
 
+class RegimeCfg(BaseModel):
+    lookback_days: int
+    min_size_multiplier: float
+    max_vrp_shift: float
+
+
+class MacroEvent(BaseModel):
+    at: str
+    name: str
+
+
+class MacroCfg(BaseModel):
+    blackout_before_hours: float
+    blackout_after_minutes: float
+    near_event_size_factor: float
+    events: list[MacroEvent]
+
+
 class UniverseCfg(BaseModel):
     size: int
     min_option_volume: int
@@ -112,6 +130,8 @@ class Config(BaseModel):
     gate: GateCfg
     manage: ManageCfg
     signal: SignalCfg
+    regime: RegimeCfg
+    macro: MacroCfg
     universe: UniverseCfg
     llm: LlmCfg
     dashboard: DashboardCfg

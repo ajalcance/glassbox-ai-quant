@@ -75,6 +75,36 @@ signal:
   # reasoning that rejects a credit above the spread width.
   max_plausible_ratio: 5.0
 
+regime:
+  # Cross-asset risk read. Each factor is a percentile of today's value within
+  # its own trailing window, so no factor needs a hand-chosen threshold. The
+  # composite is the mean of whatever is available; a missing factor drops out
+  # rather than defaulting.
+  lookback_days: 60
+  # Size multiplier at maximum stress. 1.0 in calm markets, tapering linearly to
+  # this floor as the composite approaches 1. Regime scales conviction; it never
+  # creates or fully vetoes a trade on its own.
+  min_size_multiplier: 0.4
+  # How far stress shifts the VRP bounds toward selling premium. In a fearful
+  # market premium is genuinely richer, so the floor for selling relaxes and the
+  # ceiling for buying tightens, each by up to this much.
+  max_vrp_shift: 0.15
+
+macro:
+  # High-impact scheduled releases. Near one, every straddle carries embedded
+  # event premium, which makes the edge test read "overpriced" and steers the
+  # system into selling insurance right before the event. Contest week is
+  # hand-verified and hardcoded: four dates beat any API for auditability.
+  # Times are US Eastern.
+  blackout_before_hours: 2.0
+  blackout_after_minutes: 30
+  # Sizing haircut for non-premium-selling entries inside the window.
+  near_event_size_factor: 0.6
+  events:
+    - { at: "2026-09-01T10:00:00-04:00", name: "ISM Manufacturing + JOLTS" }
+    - { at: "2026-09-02T08:15:00-04:00", name: "ADP Employment" }
+    - { at: "2026-09-04T08:30:00-04:00", name: "Nonfarm Payrolls" }
+
 universe:
   size: 50
   min_option_volume: 1000

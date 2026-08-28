@@ -59,6 +59,7 @@ def size_position(
     underlying_vol: float | None = None,
     target_vol: float = 0.01,
     loss_streak: int = 0,
+    context_multiplier: float = 1.0,
 ) -> SizingResult:
     """Contracts to trade, or zero with a reason.
 
@@ -78,7 +79,11 @@ def size_position(
             0, f"meta-label p={meta_label_p:.2f} below {cfg.risk.min_meta_label_p}", 0.0, 0.0, 0, 0
         )
 
-    r_dollars = equity * (cfg.risk.r_per_trade_pct / 100) * mult
+    # Context (regime, macro proximity) scales conviction multiplicatively:
+    # it can shrink a position toward zero but never inflate past the caps.
+    r_dollars = (
+        equity * (cfg.risk.r_per_trade_pct / 100) * mult * max(0.0, min(context_multiplier, 1.0))
+    )
     # A losing streak halves risk until the streak breaks — the anti-martingale
     # direction: reduce after losses, never increase.
     if loss_streak >= cfg.risk.loss_streak_half_size:

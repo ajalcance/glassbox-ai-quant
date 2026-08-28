@@ -181,6 +181,11 @@ class Trader:
                 except Exception:  # noqa: BLE001 -- unmeasurable discounts nothing
                     realized = None
 
+        # Environment: regime scales conviction, macro proximity constrains.
+        regime_reading = self.regime_reading()
+        macro_window = self.macro_window()
+        vrp_shift = regime_reading.vrp_shift(self.cfg) if regime_reading else 0.0
+
         forecast = None
         if hasattr(self.data, "forecast_move_pct"):
             try:
@@ -200,6 +205,7 @@ class Trader:
             cfg=self.cfg,
             realized_move_pct=realized,
             forecast_move_pct=forecast,
+            vrp_shift=vrp_shift,
         )
         self.audit.append(
             "edge_test",
@@ -213,6 +219,9 @@ class Trader:
                 "implied_move_pct": edge.implied_move_pct,
                 "forecast_move_pct": forecast,
                 "vrp_ratio": edge.vrp_ratio,
+                "vrp_shift": vrp_shift,
+                "regime": regime_reading.as_dict() if regime_reading else None,
+                "macro": macro_window.as_dict() if macro_window else None,
                 "detail": edge.detail,
             },
         )
@@ -268,6 +277,15 @@ class Trader:
             novelty=verdict.novelty,
         )
         p, label_detail = self.meta_label(features, view.confidence)
+        context_mult = 1.0
+        context_parts = []
+        if regime_reading is not None and regime_reading.known:
+            m = regime_reading.size_multiplier(self.cfg)
+            context_mult *= m
+            context_parts.append(f"regime {m:.2f}x")
+        if macro_window is not None and macro_window.active:
+            context_mult *= self.cfg.macro.near_event_size_factor
+            context_parts.append(f"macro {self.cfg.macro.near_event_size_factor:.2f}x")
         sizing = size_position(
             equity=market.equity,
             max_loss_per_spread=risk,
@@ -275,6 +293,7 @@ class Trader:
             cfg=self.cfg,
             underlying_vol=realized_vol,
             loss_streak=market.loss_streak,
+            context_multiplier=context_mult,
         )
         self.audit.append(
             "ml",
@@ -285,6 +304,8 @@ class Trader:
                 "arm_detail": arm_detail,
                 "meta_label_p": p,
                 "meta_label_detail": label_detail,
+                "context_multiplier": context_mult,
+                "context_detail": ", ".join(context_parts) or "none",
                 "features": features.as_dict(),
             },
         )
@@ -317,6 +338,7 @@ class Trader:
             new_positions_today=market.new_positions_today,
             duplicate_open=self.has_duplicate(structure),
             corporate_blackout=blackout,
+            macro_window=macro_window,
         )
         decision = evaluate(ctx, self.cfg)
         self.audit.append(
@@ -417,6 +439,31 @@ class Trader:
             return horizon_hours
         hours_to_close = max(0.0, market.minutes_to_close / 60)
         return min(horizon_hours, hours_to_close) if hours_to_close else horizon_hours
+
+    def regime_reading(self):
+        """Current market regime, or None when the data layer cannot supply it.
+        Cached for ten minutes — the regime does not change per news item."""
+        if not hasattr(self.data, "daily_closes"):
+            return None
+        from glassbox import regime as regime_module
+
+        try:
+            return self.data._cached(
+                ("regime",),
+                600.0,
+                lambda: regime_module.compute(self.data, self.filter.universe, self.cfg),
+            )
+        except Exception:  # noqa: BLE001 -- unknown environment is reported as
+            # unknown; it must never block the pipeline.
+            return None
+
+    def macro_window(self):
+        from glassbox import macro as macro_module
+
+        try:
+            return macro_module.current_window(self.cfg, self.clock())
+        except Exception:  # noqa: BLE001
+            return None
 
     def corporate_blackout(self, symbol: str, structure, horizon_hours: float):
         """Upcoming corporate actions for the underlying, or None if unchecked.

@@ -97,7 +97,9 @@ def remaining_move(expected_pct: float, realized_pct: float | None) -> float:
     return max(0.0, expected_pct - realized_pct)
 
 
-def vrp_permits(verdict: EdgeVerdict, vrp_ratio: float | None, cfg) -> tuple[bool, str]:
+def vrp_permits(
+    verdict: EdgeVerdict, vrp_ratio: float | None, cfg, vrp_shift: float = 0.0
+) -> tuple[bool, str]:
     """Does the volatility risk premium agree with the direction we chose?
 
     The expected-vs-implied test says the market has mispriced *this event*.
@@ -110,15 +112,19 @@ def vrp_permits(verdict: EdgeVerdict, vrp_ratio: float | None, cfg) -> tuple[boo
     """
     if vrp_ratio is None:
         return True, "no volatility forecast"
-    if verdict is EdgeVerdict.LONG_CONVEXITY and vrp_ratio > cfg.signal.vrp_max_for_debit:
+    # Stress shifts both bounds toward selling: premium is genuinely richer, so
+    # selling is better paid and buying is more expensive. Calm shifts back.
+    debit_ceiling = cfg.signal.vrp_max_for_debit - max(vrp_shift, 0.0)
+    credit_floor = cfg.signal.vrp_min_for_credit - vrp_shift
+    if verdict is EdgeVerdict.LONG_CONVEXITY and vrp_ratio > debit_ceiling:
         return False, (
-            f"VRP {vrp_ratio:.2f} > {cfg.signal.vrp_max_for_debit} — options already "
+            f"VRP {vrp_ratio:.2f} > {debit_ceiling:.2f} — options already "
             f"price more movement than this name delivers; buying them is the "
             f"expensive side"
         )
-    if verdict is EdgeVerdict.SHORT_PREMIUM and vrp_ratio < cfg.signal.vrp_min_for_credit:
+    if verdict is EdgeVerdict.SHORT_PREMIUM and vrp_ratio < credit_floor:
         return False, (
-            f"VRP {vrp_ratio:.2f} < {cfg.signal.vrp_min_for_credit} — premium is thin "
+            f"VRP {vrp_ratio:.2f} < {credit_floor:.2f} — premium is thin "
             f"relative to realised movement; not paid enough to be short"
         )
     return True, f"VRP {vrp_ratio:.2f} agrees"
@@ -135,6 +141,7 @@ def evaluate_edge(
     cfg,
     realized_move_pct: float | None = None,
     forecast_move_pct: float | None = None,
+    vrp_shift: float = 0.0,
 ) -> EdgeResult:
     """Compare the analyst's expected move against what the options imply.
 
@@ -214,7 +221,7 @@ def evaluate_edge(
             f"(ratio {ratio:.2f}) — fairly priced, no edge",
         )
 
-    permitted, vrp_detail = vrp_permits(verdict, vrp, cfg)
+    permitted, vrp_detail = vrp_permits(verdict, vrp, cfg, vrp_shift)
     if not permitted:
         return result(EdgeVerdict.NO_EDGE, ratio, vrp_detail)
 

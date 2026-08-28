@@ -1,0 +1,82 @@
+"""Scheduled macro releases — when not to trust our own signal.
+
+Near a high-impact release every straddle in the universe carries embedded
+event premium. The edge test compares a stock-specific expectation against that
+inflated straddle, reads "overpriced", and would happily sell insurance right
+before the insured event. So inside the window:
+
+  * no new short-premium positions — that is the trade the distortion
+    manufactures;
+  * long-convexity entries are permitted but haircut, since the same premium
+    makes them expensive;
+  * after the release clears, the news it generates flows through the ordinary
+    pipeline against post-event straddles.
+
+Contest week uses a hand-verified table in config. Four dates checked by hand
+beat any API for a four-day contest: zero dependencies, zero failure modes, and
+the schedule is auditable in the repo. The interface takes a calendar provider
+later without the callers changing.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+
+@dataclass(frozen=True, slots=True)
+class MacroWindow:
+    active: bool
+    event_name: str = ""
+    event_at: datetime | None = None
+    minutes_until: float | None = None  # negative = event already passed
+    detail: str = "no scheduled release nearby"
+
+    def as_dict(self) -> dict:
+        return {
+            "active": self.active,
+            "event": self.event_name,
+            "minutes_until": self.minutes_until,
+            "detail": self.detail,
+        }
+
+
+def _parse_events(cfg) -> list[tuple[datetime, str]]:
+    out = []
+    for event in cfg.macro.events:
+        try:
+            out.append((datetime.fromisoformat(event.at), event.name))
+        except ValueError:
+            continue  # a malformed entry must not take the pipeline down
+    return sorted(out)
+
+
+def current_window(cfg, now: datetime) -> MacroWindow:
+    """Is `now` inside the blackout window of any configured release?"""
+    before = timedelta(hours=cfg.macro.blackout_before_hours)
+    after = timedelta(minutes=cfg.macro.blackout_after_minutes)
+
+    for at, name in _parse_events(cfg):
+        if at - before <= now <= at + after:
+            minutes = (at - now).total_seconds() / 60
+            when = f"in {minutes:.0f}m" if minutes >= 0 else f"{-minutes:.0f}m ago"
+            return MacroWindow(
+                True,
+                name,
+                at,
+                minutes,
+                f"{name} {when} — straddles carry event premium",
+            )
+
+    upcoming = [(at, name) for at, name in _parse_events(cfg) if at > now]
+    if upcoming:
+        at, name = upcoming[0]
+        hours = (at - now).total_seconds() / 3600
+        return MacroWindow(
+            False,
+            name,
+            at,
+            hours * 60,
+            f"next release {name} in {hours:.1f}h",
+        )
+    return MacroWindow(False)

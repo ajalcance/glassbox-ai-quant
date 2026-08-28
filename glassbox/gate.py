@@ -67,6 +67,8 @@ class GateContext:
     # None means "not checked". The gate treats that as a pass and says so,
     # rather than silently implying the security was cleared.
     corporate_blackout: object | None = None
+    # --- macro releases -----------------------------------------------------
+    macro_window: object | None = None
 
     @property
     def total_max_loss(self) -> float:
@@ -307,6 +309,26 @@ def _check_rate_limits(ctx, cfg) -> CheckResult:
     )
 
 
+def _check_macro_blackout(ctx, cfg) -> CheckResult:
+    """No new short premium into a scheduled macro release.
+
+    Near a release, every straddle carries embedded event premium. The edge
+    test reads that as "overpriced" and proposes exactly the wrong trade:
+    selling insurance minutes before the insured event. Long convexity is
+    permitted — the same distortion only makes it expensive, and sizing already
+    haircuts it — but the short-premium trade the distortion manufactures is
+    refused outright.
+    """
+    window = ctx.macro_window
+    if window is None:
+        return CheckResult("macro_blackout", True, "not checked")
+    if not getattr(window, "active", False):
+        return CheckResult("macro_blackout", True, window.detail)
+    if ctx.structure is not None and getattr(ctx.structure, "is_credit", False):
+        return CheckResult("macro_blackout", False, window.detail)
+    return CheckResult("macro_blackout", True, f"{window.detail}; long structure permitted")
+
+
 def _check_corporate_action(ctx, cfg) -> CheckResult:
     """Refuse a position whose underlying is about to change under it.
 
@@ -344,6 +366,7 @@ CHECKS: tuple[Callable, ...] = (
     _check_daily_loss,
     _check_drawdown,
     _check_rate_limits,
+    _check_macro_blackout,
     _check_corporate_action,
     _check_duplicate,
 )
