@@ -66,8 +66,18 @@ llm:
   # small fast model doing constrained extraction, not reasoning. The nightly
   # report runs once and can afford a large model.
   analyst_model: "accounts/fireworks/models/gpt-oss-120b"
-  report_model: "accounts/fireworks/models/kimi-k3"
+  # minimax-m3 returns clean prose. Several strong models on this catalogue are
+  # unusable here for different reasons: gpt-oss-120b, glm-5p2 and qwen3p7-plus
+  # return empty content for free-form text (their output goes to a reasoning
+  # channel), and kimi-k3 emits its chain-of-thought into the body. Verified by
+  # `python -m glassbox.verify_llm --prose`.
+  report_model: "accounts/fireworks/models/minimax-m3"
   analyst_max_tokens: 600
+  # Generous on purpose. The report model reasons before answering, and that
+  # reasoning is charged against max_tokens — measured at ~3,900 characters of
+  # it. Too small a budget truncates the answer to nothing while the request
+  # still looks successful.
+  report_max_tokens: 2500
   timeout_seconds: 20
 
 dashboard:

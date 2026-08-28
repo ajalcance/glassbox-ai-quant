@@ -78,6 +78,7 @@ class LlmCfg(BaseModel):
     analyst_model: str
     report_model: str
     analyst_max_tokens: int
+    report_max_tokens: int
     timeout_seconds: int
 
 

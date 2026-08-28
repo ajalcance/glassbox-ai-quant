@@ -59,6 +59,17 @@ supervisor heartbeat, halt reason, audit-chain verified) - **P&L by bandit arm**
 ## Reporting
 Nightly cron after US close: P&L, trades, vetoes + reasons, risk utilization, learning deltas; Fireworks large model writes the narrative. One markdown/day → dashboard + social post seed; Thursday's report drafts the required one-pager.
 
+## MCP and CLI
+
+Both are used, each where it fits. MCP is the human-facing lane — `.mcp.json`
+lets any MCP client inspect the account conversationally, and the agent never
+routes an order through it. The CLI is an independent verification source for
+the nightly cross-check: a different binary and code path from the trader, so a
+disagreement means one of the two views of the account is actually wrong.
+Measured caveat: CLI v0.0.13 completes roughly one call in six, which is exactly
+why the cross-check is best-effort, report-time, and reports *unavailable*
+rather than silent agreement.
+
 ## Infrastructure
 DigitalOcean droplet 2GB/1vCPU ($12/mo hourly ≈ $3/week), NYC, Ubuntu 24.04. Docker Compose: `trader` · `supervisor` · `dashboard` + Caddy TLS. UFW 22/80/443. Secrets via `.env` on host only. Models train locally; frozen artifacts ship. Total run cost ≲ $15.
 

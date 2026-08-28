@@ -52,9 +52,19 @@ uv run python -m glassbox.ml.train           # fit the frozen volatility model
 uv run python -m glassbox.runner --dry-run   # full pipeline, live data, no orders
 uv run python -m glassbox.supervisor.run     # guards + kill switch (separate process)
 uv run python -m glassbox.dashboard.app      # dashboard on :8847
+uv run python -m glassbox.report.run         # nightly report + CLI cross-check
 ```
 
 Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.
+
+## Alpaca surface used
+
+- **Trading API** (alpaca-py) — the trading path: chains, quotes, Greeks, atomic multi-leg orders
+- **News API** — the WebSocket stream the whole signal pipeline is driven by
+- **MCP server** — `.mcp.json` connects any MCP client so a person can inspect the account in plain language. The agent never routes an order through it; the deterministic gate is the only path to the broker
+- **CLI** — an independent second source of truth for the nightly cross-check. Different binary, different code path, its own auth, so a disagreement means something is genuinely wrong
+
+See [docs/MCP_AND_CLI.md](docs/MCP_AND_CLI.md), including a measured caveat about CLI reliability.
 
 ## The dashboard shows what Alpaca can't
 

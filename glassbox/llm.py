@@ -114,6 +114,36 @@ class LlmClient:
 
         raise LlmSchemaError(f"schema not satisfied after retry: {last_error}")
 
+    def extract_text(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int = 700,
+        temperature: float = 0.2,
+    ) -> str:
+        """Free-form prose. Used only for the nightly narrative — never in the
+        trading path, where every model output is schema-validated."""
+        try:
+            completion = self.client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as e:
+            raise LlmUnavailableError(f"{type(e).__name__}: {e}") from e
+        text = (completion.choices[0].message.content or "").strip()
+        if not text:
+            # Some reasoning models return their answer on a separate channel and
+            # leave content empty. Treat that as unavailable rather than writing
+            # an empty section — the caller degrades to numbers only.
+            raise LlmUnavailableError(f"{model} returned empty content")
+        return text
+
     def list_models(self) -> list[str]:
         """Model ids available to this account — model names change, so we look
         them up rather than trusting a hardcoded string."""

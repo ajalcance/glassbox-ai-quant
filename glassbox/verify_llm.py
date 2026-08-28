@@ -90,6 +90,31 @@ def main() -> int:
     print(f"  detail     {edge.detail}")
     print(f"  structures {[str(s) for s in edge.eligible_structures] or 'none'}")
 
+    print("\nChecking the report model returns usable prose...")
+    try:
+        prose = llm.extract_text(
+            model=cfg.llm.report_model,
+            system="You write terse operational notes. Plain prose, no headings, "
+            "no bullets, 30 words max. Output only the note.",
+            user="Note that the system saw no news and placed no trades today.",
+            max_tokens=cfg.llm.report_max_tokens,
+        )
+    except LlmUnavailableError as e:
+        print(f"FAIL  report model: {e}")
+        print("      Pick another id from the list above; not every model returns")
+        print("      free-form text on the content channel.")
+        return 1
+
+    leaked = any(
+        marker in prose.lower()[:200]
+        for marker in ("draft:", "rules:", "let me", "word count", "i should", "careful:")
+    )
+    print(f"  {prose[:150]}")
+    if leaked:
+        print("FAIL  report model leaked its reasoning into the body")
+        return 1
+    print("  ok    clean prose, no reasoning leakage")
+
     print("\nLLM VERIFY PASSED")
     return 0
 

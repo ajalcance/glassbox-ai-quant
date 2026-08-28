@@ -45,3 +45,13 @@ def test_dashboard_port_avoids_common_dev_ports():
     load_config.cache_clear()
     port = load_config().dashboard.port
     assert port not in {3000, 4200, 5000, 5173, 8000, 8080, 8888, 9000}
+
+
+def test_report_token_budget_accounts_for_reasoning():
+    """The report model reasons before answering and that reasoning is charged
+    against max_tokens. A small budget truncates the answer to nothing while the
+    request still returns successfully."""
+    load_config.cache_clear()
+    cfg = load_config()
+    assert cfg.llm.report_max_tokens >= 2000
+    assert cfg.llm.report_max_tokens > cfg.llm.analyst_max_tokens
