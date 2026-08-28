@@ -35,8 +35,10 @@ Then: meta-labeler P(profit) sets size → bandit picks structure → risk gate 
 ## Position sizing over a position's life
 
 Size is set at entry and never changes: the manager holds whole or closes whole.
-Scaling out is not a design choice we declined but one unavailable to us — at a
-0.5% risk budget a typical spread is a single contract. Scaling in is declined
+Scaling out is not a design choice we declined but one unavailable to us — at
+this risk budget a typical spread is one to a few contracts, and partial exits
+on a two-leg structure are not worth the extra execution surface. Scaling in is
+declined
 deliberately, since adding to an open thesis raises risk on a view already in
 the market.
 
@@ -49,7 +51,7 @@ and one at 6.1% took none, which is a tripwire rather than risk management.
 
 ## Risk numbers (per $100k, all in config)
 
-R = 0.5%/trade · max loss 1.5%/position, 3%/underlying · heat ≤ 6% · delta-dollars ±$15k · vega/gamma capped · daily loss −2% → halt · max DD −6% → halt · 4 straight losses → half size · p < 0.55 → no trade · flatten everything **Thu Sep 3 at close**.
+R = 1.0%/trade · max loss 1.5%/position, 3%/underlying · heat ≤ 6% · delta-dollars ±$40k · vega/gamma capped · daily loss −2% → halt · max DD −6% → halt · 4 straight losses → half size · p < 0.55 → no trade · flatten everything **Thu Sep 3 at close**.
 
 ## Dashboard (demo URL)
 Read-only single-page dashboard served by FastAPI with SSE. Vanilla JS and one

@@ -20,10 +20,16 @@ def test_multiplier_scales_and_is_capped():
 
 
 def test_sizing_respects_r_budget():
-    # R = 0.5% of 100k = $500, multiplier 1.0 at p>=0.85 -> 1 spread at $380
-    r = size_position(100_000, 380, meta_label_p=0.90, cfg=CFG)
-    assert r.approved and r.qty == 1
-    assert r.r_dollars == pytest.approx(500.0)
+    """The R budget is equity x r_per_trade_pct at full conviction, and qty is
+    how many whole spreads fit inside it — asserted against config rather than
+    a pinned number, so tuning R does not require editing this test."""
+    expected_budget = 100_000 * CFG.risk.r_per_trade_pct / 100
+    per_spread = 380
+    r = size_position(100_000, per_spread, meta_label_p=0.90, cfg=CFG)
+    assert r.r_dollars == pytest.approx(expected_budget)
+    assert r.approved and r.qty == int(expected_budget // per_spread)
+    # Risk taken never exceeds the budget that authorised it.
+    assert r.qty * per_spread <= expected_budget
 
 
 def test_smaller_of_two_budgets_wins():

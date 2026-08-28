@@ -6,7 +6,24 @@ account:
   paper: true
 
 risk:
-  r_per_trade_pct: 0.5           # base risk R as % of equity
+  # Base risk R as % of equity. Set to 1.0 for the contest horizon after the
+  # first live session showed the sizer computing budgets of $209-$342 against
+  # a nominal $500: the meta-labeler abstains until 30 labelled outcomes exist,
+  # which four trading days cannot produce, so its confidence multiplier holds
+  # every position at roughly 0.2-0.35% indefinitely. 1.0 restores approximately
+  # the risk the system was designed to take once that multiplier is applied.
+  #
+  # Safe because the binding constraint on the highest-notional names is no
+  # longer R but delta_dollars_band: one ATM SPY vertical is $25-35k of the
+  # $40k band, so SPY stays capped at a single spread whatever R says, and the
+  # increase reaches only lower-priced underlyings. loss_streak_half_size then
+  # halves R after four consecutive losses, well before the -2% daily halt.
+  #
+  # Every hard limit below is deliberately unchanged. This is a sizing
+  # preference; those are the safety envelope. Decided before the measurement
+  # window opened and frozen for its duration — re-tuning R mid-contest would
+  # be parameter optimisation on contest data.
+  r_per_trade_pct: 1.0
   max_loss_per_position_pct: 1.5
   max_loss_per_underlying_pct: 3.0
   portfolio_heat_pct: 6.0        # sum of max-loss across open positions

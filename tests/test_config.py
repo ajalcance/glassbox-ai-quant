@@ -6,7 +6,13 @@ def test_default_config_loads_and_matches_plan():
     cfg = load_config()
     assert cfg.account.paper is True
     assert cfg.account.starting_equity == 100000
-    assert cfg.risk.r_per_trade_pct == 0.5
+    # R is a sizing preference and may be tuned; these are the relationships
+    # that must hold whatever it is set to. Per-trade risk must stay below the
+    # per-position cap, which must stay below the heat cap, or the backstops
+    # stop being backstops.
+    assert 0 < cfg.risk.r_per_trade_pct <= cfg.risk.max_loss_per_position_pct
+    assert cfg.risk.max_loss_per_position_pct < cfg.risk.portfolio_heat_pct
+    assert cfg.risk.daily_loss_halt_pct < cfg.risk.max_drawdown_halt_pct
     assert cfg.risk.portfolio_heat_pct == 6.0
     assert cfg.risk.max_drawdown_halt_pct == 6.0
     assert cfg.risk.min_meta_label_p == 0.55
