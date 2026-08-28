@@ -46,13 +46,49 @@ def heartbeat_age(store) -> float:
     return (now_utc() - datetime.fromisoformat(stamp)).total_seconds()
 
 
-def flatten_all(client, audit) -> int:
-    """Cancel every open order, then close every position. Blunt on purpose."""
+def flatten_all(client, audit, attempts: int = 4, wait_seconds: float = 3.0) -> int:
+    """Cancel every open order, then close every position. Blunt on purpose —
+    but verified and retried, because one pass is not enough for option
+    spreads: close_all_positions closes legs as independent positions in
+    arbitrary order, and selling a spread's long leg while its short leg still
+    exists would create a naked short, which the broker rightly rejects. The
+    first pass then closes the short legs; the retry closes the long legs the
+    first pass could not. A flatten that stops at one attempt can leave legs
+    on the book at exactly the moment the guards decided everything must go."""
     canceled = client.cancel_orders()
-    closed = client.close_all_positions(cancel_orders=True)
-    n = len(closed or [])
-    audit.append("flatten", {"orders_canceled": len(canceled or []), "positions_closed": n})
-    return n
+    total_closed = 0
+    for attempt in range(attempts):
+        closed = client.close_all_positions(cancel_orders=True)
+        total_closed += len(closed or [])
+        time.sleep(wait_seconds)  # closes are async at the broker
+        remaining = client.get_all_positions()
+        if not remaining:
+            audit.append(
+                "flatten",
+                {
+                    "orders_canceled": len(canceled or []),
+                    "positions_closed": total_closed,
+                    "attempts": attempt + 1,
+                },
+            )
+            return total_closed
+        print(
+            f"flatten attempt {attempt + 1}: {len(remaining)} position(s) remain "
+            f"({', '.join(p.symbol for p in remaining)}) — retrying",
+            file=sys.stderr,
+        )
+    leftovers = [p.symbol for p in client.get_all_positions()]
+    audit.append(
+        "flatten_incomplete",
+        {
+            "orders_canceled": len(canceled or []),
+            "positions_closed": total_closed,
+            "attempts": attempts,
+            "remaining": leftovers,
+        },
+    )
+    print(f"FLATTEN INCOMPLETE after {attempts} attempts: {leftovers}", file=sys.stderr)
+    return total_closed
 
 
 def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardAction:

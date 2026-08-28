@@ -58,7 +58,7 @@ def test_peak_equity_ratchets_up_only(store):
     assert update_peak_equity(store, 99_000) == 105_000, "peak must not fall"
 
 
-def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
+def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys, monkeypatch):
     """Under a restart policy, exiting on a hard halt produces a crash loop that
     re-flattens every few seconds and reads as a broken system. The supervisor
     must stay alive and keep watching instead."""
@@ -81,6 +81,11 @@ def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
         def close_all_positions(self, cancel_orders=True):
             return []
 
+        def get_all_positions(self):
+            return []
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+
     from glassbox.supervisor.guards import KILL_SWITCH_FILE
 
     kill = tmp_path / KILL_SWITCH_FILE
@@ -91,6 +96,69 @@ def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
         action = supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
         assert action is GuardAction.HALT_HARD
     assert client.flattens == 3, "each tick flattens; the loop must not exit"
+
+
+def test_flatten_retries_until_spread_legs_are_gone(audit, monkeypatch):
+    """Found live by drill-flat: close_all_positions closes a spread's legs as
+    independent positions in arbitrary order, and selling the long leg while
+    the short still exists would create a naked short — rejected. One pass
+    closed the short leg and left the long on the book. Flatten must verify
+    and retry until the broker is actually flat."""
+    from types import SimpleNamespace
+
+    from glassbox.supervisor import run as supervisor_run
+
+    class SpreadClient:
+        def __init__(self):
+            # Pass 1: long-leg close is refused (short leg still open).
+            # Pass 2: with the short gone, the long leg closes fine.
+            self.book = [
+                SimpleNamespace(symbol="SPY260831C00772000"),  # long — sticks once
+                SimpleNamespace(symbol="SPY260831C00783000"),  # short — closes
+            ]
+            self.close_calls = 0
+
+        def cancel_orders(self):
+            return []
+
+        def close_all_positions(self, cancel_orders=True):
+            self.close_calls += 1
+            closed = [p for p in self.book if self.close_calls > 1 or "783" in p.symbol]
+            self.book = [p for p in self.book if p not in closed]
+            return closed
+
+        def get_all_positions(self):
+            return list(self.book)
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    client = SpreadClient()
+    n = supervisor_run.flatten_all(client, audit)
+    assert client.book == [], "flatten must not stop while legs remain"
+    assert client.close_calls == 2 and n == 2
+
+
+def test_flatten_incomplete_is_audited_not_silent(audit, monkeypatch):
+    """If the book still is not flat after every retry, that must be a loud
+    audit event — a guard that half-worked and said nothing is the worst case."""
+    from types import SimpleNamespace
+
+    from glassbox.supervisor import run as supervisor_run
+
+    class StuckClient:
+        def cancel_orders(self):
+            return []
+
+        def close_all_positions(self, cancel_orders=True):
+            return []
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="SPY260831C00772000")]
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    supervisor_run.flatten_all(StuckClient(), audit, attempts=2)
+    files = sorted(audit.dir.glob("*.jsonl"))
+    text = files[-1].read_text()
+    assert "flatten_incomplete" in text and "SPY260831C00772000" in text
 
 
 def test_kill_switch_lives_on_the_shared_data_volume(tmp_path):
