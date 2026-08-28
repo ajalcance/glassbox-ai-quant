@@ -19,17 +19,26 @@ STAGES = ("filter", "analyst", "market_data", "edge", "chain", "sizing", "gate",
 
 def read_records(audit_dir: str | Path, days: int = 3) -> list[dict]:
     """Most recent records, oldest first. Malformed lines are skipped, not
-    fatal — a dashboard must never be the reason you cannot see the system."""
+    fatal — a dashboard must never be the reason you cannot see the system.
+
+    Each process writes its own day-file (YYYY-MM-DD-<role>.jsonl), so a day
+    spans several files: group by the date prefix, take the last `days` days,
+    then merge all roles' records into one timeline ordered by timestamp."""
     audit_dir = Path(audit_dir)
     if not audit_dir.exists():
         return []
+    by_day: dict[str, list[Path]] = defaultdict(list)
+    for path in audit_dir.glob("*.jsonl"):
+        by_day[path.stem[:10]].append(path)
     records = []
-    for path in sorted(audit_dir.glob("*.jsonl"))[-days:]:
-        for line in path.read_text(errors="replace").splitlines():
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    for day in sorted(by_day)[-days:]:
+        for path in sorted(by_day[day]):
+            for line in path.read_text(errors="replace").splitlines():
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    records.sort(key=lambda r: r.get("ts", ""))
     return records
 
 
@@ -190,13 +199,15 @@ def pnl_by_arm(store) -> list[dict]:
 
 
 def audit_chain_status(audit_dir: str | Path) -> dict:
-    """Verify today's hash chain — the page should show whether its own
-    evidence is intact."""
-    from glassbox.audit import AuditLog
-    from glassbox.clock import now_utc
+    """Verify today's hash chains — the page should show whether its own
+    evidence is intact. One chain per writing process, each checked alone."""
+    from glassbox.audit import verify_day
 
-    path = Path(audit_dir) / f"{now_utc():%Y-%m-%d}.jsonl"
-    if not path.exists():
+    ok, n, broken = verify_day(audit_dir)
+    if n == 0 and ok:
         return {"verified": True, "records": 0, "note": "no records yet today"}
-    ok, n = AuditLog.verify_chain(path)
-    return {"verified": ok, "records": n, "note": "" if ok else "CHAIN BROKEN"}
+    return {
+        "verified": ok,
+        "records": n,
+        "note": "" if ok else "CHAIN BROKEN: " + ", ".join(broken),
+    }

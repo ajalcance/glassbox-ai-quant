@@ -13,7 +13,7 @@ from glassbox.report.generate import DayStats, collect, render_markdown
 
 
 def seed(tmp_path, *entries):
-    log = AuditLog(tmp_path)
+    log = AuditLog(tmp_path, role="trader")
     for kind, payload in entries:
         log.append(kind, payload)
     return now_utc().date()

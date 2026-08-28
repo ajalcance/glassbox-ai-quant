@@ -69,7 +69,7 @@ def test_vetoes_and_decisions_endpoints(client):
 
 
 def _records(tmp_path, *entries):
-    log = AuditLog(tmp_path)
+    log = AuditLog(tmp_path, role="trader")
     for kind, payload in entries:
         log.append(kind, payload)
     return read_records(tmp_path)
@@ -192,13 +192,13 @@ def test_missing_audit_directory_is_not_an_error(tmp_path):
 def test_chain_status_reports_verification(tmp_path):
     from glassbox.clock import now_utc
 
-    log = AuditLog(tmp_path)
+    log = AuditLog(tmp_path, role="trader")
     for i in range(3):
         log.append("gate", {"i": i})
     status = audit_chain_status(tmp_path)
     assert status["verified"] and status["records"] == 3
 
-    path = tmp_path / f"{now_utc():%Y-%m-%d}.jsonl"
+    path = tmp_path / f"{now_utc():%Y-%m-%d}-trader.jsonl"
     lines = path.read_bytes().splitlines()
     tampered = json.loads(lines[1])
     tampered["i"] = 99

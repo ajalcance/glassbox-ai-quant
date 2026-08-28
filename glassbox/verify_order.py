@@ -82,7 +82,7 @@ def main() -> int:
     cfg = load_config()
     client = trading_client()
     store = Store(cfg.paths.db)
-    audit = AuditLog(cfg.paths.audit_dir)
+    audit = AuditLog(cfg.paths.audit_dir, role="verify-order")
     router = OrderRouter(client, store, audit)
 
     acct = client.get_account()

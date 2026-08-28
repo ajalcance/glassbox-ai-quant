@@ -148,7 +148,7 @@ class Runner:
         self.stopping = threading.Event()
 
         self.store = Store(cfg.paths.db)
-        self.audit = AuditLog(cfg.paths.audit_dir)
+        self.audit = AuditLog(cfg.paths.audit_dir, role="trader")
         self.trading = trading_client()
         self.data = MarketData(
             trading_client=self.trading,

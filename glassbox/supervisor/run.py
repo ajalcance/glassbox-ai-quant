@@ -133,7 +133,7 @@ def main() -> int:
     cfg = load_config()
     root = Path(__file__).resolve().parents[2]
     store = Store(cfg.paths.db)
-    audit = AuditLog(cfg.paths.audit_dir)
+    audit = AuditLog(cfg.paths.audit_dir, role="supervisor")
     client = supervisor_trading_client()
 
     audit.append("supervisor_start", {"interval": args.interval, "dry_run": args.dry_run})

@@ -18,7 +18,7 @@ def store(tmp_path):
 
 @pytest.fixture
 def audit(tmp_path):
-    return AuditLog(tmp_path / "audit")
+    return AuditLog(tmp_path / "audit", role="trader")
 
 
 def leg(symbol, right, strike, side, qty=1):

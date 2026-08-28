@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
 
+from glassbox.audit import day_files
 from glassbox.clock import market_date
 
 
@@ -61,16 +62,18 @@ class DayStats:
 def collect(audit_dir: str | Path, day: date | None = None) -> DayStats:
     """Deterministic statistics for one day. No model involved."""
     day = day or market_date()
-    path = Path(audit_dir) / f"{day:%Y-%m-%d}.jsonl"
-    if not path.exists():
+    paths = day_files(audit_dir, day)
+    if not paths:
         return DayStats(day=day.isoformat())
 
     records = []
-    for line in path.read_text(errors="replace").splitlines():
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    for path in paths:
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    records.sort(key=lambda r: r.get("ts", ""))
 
     s = DayStats(day=day.isoformat())
     drops, vetoes, barriers, errors = Counter(), Counter(), Counter(), Counter()

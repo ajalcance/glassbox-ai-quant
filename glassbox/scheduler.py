@@ -147,7 +147,7 @@ def main() -> int:
 
     cfg = load_config()
     store = Store(cfg.paths.db)
-    audit = AuditLog(cfg.paths.audit_dir)
+    audit = AuditLog(cfg.paths.audit_dir, role="scheduler")
 
     try:
         if args.force:

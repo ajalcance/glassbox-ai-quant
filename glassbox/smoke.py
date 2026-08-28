@@ -72,9 +72,9 @@ def main() -> int:
         return f"{len(contracts)} SPY contracts, e.g. {contracts[0].symbol}"
 
     def audit():
-        log = AuditLog(cfg.paths.audit_dir)
+        log = AuditLog(cfg.paths.audit_dir, role="smoke")
         rec = log.append("smoke", {"note": "day-1 smoke test"})
-        ok, n = AuditLog.verify_chain(log.dir / f"{rec['ts'][:10]}.jsonl")
+        ok, n = AuditLog.verify_chain(log.path_for(datetime.fromisoformat(rec["ts"])))
         assert ok, "audit chain verification failed"
         return f"chain verified, {n} records today"
 

@@ -57,7 +57,7 @@ class DrillFailed(Exception):
 def _ctx():
     cfg = load_config()
     store = Store(cfg.paths.db)
-    audit = AuditLog(cfg.paths.audit_dir)
+    audit = AuditLog(cfg.paths.audit_dir, role="drills")
     client = trading_client()
     data = MarketData(
         trading_client=client,
@@ -539,13 +539,13 @@ def drill_simulate() -> int:
         print(f"    bandit {structure.kind!s}: {posteriors[str(structure.kind)]}")
         print(f"    training rows now: {len(store.training_rows())}")
 
-        _step(9, "Audit chain should still verify")
-        from glassbox.audit import AuditLog as _Audit
+        _step(9, "Audit chains should still verify")
+        from glassbox.audit import verify_day
 
-        ok, n = _Audit.verify_chain(audit.dir / f"{now_utc():%Y-%m-%d}.jsonl")
+        ok, n, broken = verify_day(audit.dir)
         if not ok:
-            raise DrillFailed("audit chain broken")
-        print(f"    verified, {n} records today")
+            raise DrillFailed(f"audit chain broken: {', '.join(broken)}")
+        print(f"    verified, {n} records today across all roles")
 
         print("\nSIMULATED LIFECYCLE DRILL PASSED")
         print("Everything downstream of a fill is proven. Tonight's round_trip")

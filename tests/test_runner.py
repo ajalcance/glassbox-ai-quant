@@ -10,7 +10,7 @@ from glassbox.signal.filter import NewsItem
 
 
 def test_dry_run_router_records_without_submitting(tmp_path):
-    audit = AuditLog(tmp_path)
+    audit = AuditLog(tmp_path, role="trader")
     router = DryRunRouter(audit)
     from glassbox.structures import Leg, LegSide, Right, Structure, StructureKind
 
@@ -54,7 +54,7 @@ def test_pipeline_error_is_logged_and_swallowed(tmp_path, capsys):
     """One malformed story must never end a session holding positions."""
     from glassbox.runner import Runner
 
-    audit = AuditLog(tmp_path)
+    audit = AuditLog(tmp_path, role="trader")
     runner = FakeRunner(audit, raiser=lambda item, state: 1 / 0)
     Runner.handle_news(
         runner,
@@ -68,7 +68,10 @@ def test_pipeline_error_is_logged_and_swallowed(tmp_path, capsys):
         ),
     )
     kinds = [
-        line for line in (tmp_path / f"{datetime.now(UTC):%Y-%m-%d}.jsonl").read_text().splitlines()
+        line
+        for line in (tmp_path / f"{datetime.now(UTC):%Y-%m-%d}-trader.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert any("pipeline_error" in k for k in kinds)
 
@@ -79,7 +82,7 @@ def test_duplicate_news_processed_once(tmp_path):
 
     calls = []
     runner = FakeRunner(
-        AuditLog(tmp_path),
+        AuditLog(tmp_path, role="trader"),
         raiser=lambda item, state: calls.append(item) or SimpleNamespace(traded=False, reason="ok"),
     )
     item = NewsItem(
