@@ -128,6 +128,23 @@ rather than silent agreement.
 ## Infrastructure
 DigitalOcean droplet 2GB/1vCPU ($12/mo hourly ≈ $3/week), NYC, Ubuntu 24.04. Docker Compose: `trader` · `supervisor` · `dashboard` + Caddy TLS. UFW 22/80/443. Secrets via `.env` on host only. Models train locally; frozen artifacts ship. Total run cost ≲ $15.
 
+## The best-idea floor
+
+A pure threshold system can end a five-day leaderboard window silent, which
+makes the P&L criterion unjudgeable. The floor is the honest fix: **each day,
+if nothing has traded organically by mid-afternoon, express the single best
+idea the pipeline saw at reduced size** — the signal that reached the edge test
+and was refused *only* for sitting inside the ratio band. Signals refused for
+confidence, bad data, VRP, or any gate check are never floor candidates; the
+floor relaxes exactly one bar (the ratio band), once per day, at half risk, and
+the full 18-check gate still applies at execution time. Every floor trade is
+labelled as such in the audit log — funds run "best ideas" books, and this is
+one, not a pretended threshold crossing.
+
+The cadence is the C half of the hybrid: after each close, `make calibrate`
+shows the day's ratio distribution, thresholds are adjusted from evidence, and
+the floor stays enabled only until organic flow proves sufficient.
+
 ## Testing and drills
 
 Everything is unit-tested and the pipeline has run end to end against live data,
@@ -156,9 +173,10 @@ and proves the close path works is a success.
 ### Account timing
 
 The contest account must exist **before live trading**, not at submission. The
-submission is judged on the trading activity in that account, so an account
-created on the final day has nothing to judge. Created Monday night, live from
-Tuesday.
+leaderboard window is only five days, so trading starts Monday — which means the
+fresh account and its keys are created **over the weekend**, drills run on the
+dev account only, and Monday morning runs preflight against the contest account
+before the open.
 
 ## Build schedule
 
