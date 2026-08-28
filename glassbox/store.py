@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_price   REAL,
     max_loss      REAL NOT NULL,
     status        TEXT NOT NULL,        -- opening | open | closing | closed
+    horizon_hours REAL,
+    peak_pnl      REAL NOT NULL DEFAULT 0,
+    exit_barrier  TEXT,
+    meta_label    INTEGER,
     opened_at     TEXT,
     closed_at     TEXT,
     exit_reason   TEXT,
@@ -66,6 +70,28 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created.
+
+        CREATE TABLE IF NOT EXISTS silently leaves an older table alone, so a
+        store built by a previous version would be missing newer columns and
+        fail at write time — mid-session, holding real positions.
+        """
+        wanted = {
+            "positions": {
+                "horizon_hours": "REAL",
+                "peak_pnl": "REAL NOT NULL DEFAULT 0",
+                "exit_barrier": "TEXT",
+                "meta_label": "INTEGER",
+            }
+        }
+        for table, columns in wanted.items():
+            existing = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -135,6 +161,37 @@ class Store:
                 f"INSERT INTO positions ({cols}) VALUES ({marks})",
                 (position_id, *fields.values()),
             )
+
+    def record_peak_pnl(self, position_id: str, pnl: float) -> float:
+        """Peak unrealised P&L ratchets up only — it is the reference the
+        break-even stop is measured against, so it must not decay."""
+        row = self._conn.execute(
+            "SELECT peak_pnl FROM positions WHERE position_id=?", (position_id,)
+        ).fetchone()
+        peak = float(row["peak_pnl"]) if row and row["peak_pnl"] is not None else 0.0
+        if pnl > peak:
+            self._conn.execute(
+                "UPDATE positions SET peak_pnl=? WHERE position_id=?", (pnl, position_id)
+            )
+            return pnl
+        return peak
+
+    def close_position(
+        self, position_id: str, barrier: str, label: int, realized_pnl: float, closed_at: str
+    ) -> None:
+        """Record the exit and its label. The barrier that closed the position
+        is the training signal, so both are written together."""
+        self._conn.execute(
+            "UPDATE positions SET status='closed', exit_barrier=?, meta_label=?, "
+            "realized_pnl=?, closed_at=?, exit_reason=? WHERE position_id=?",
+            (barrier, label, realized_pnl, closed_at, barrier, position_id),
+        )
+
+    def training_rows(self) -> list[sqlite3.Row]:
+        """Closed, labelled positions — the meta-labeler's dataset."""
+        return self._conn.execute(
+            "SELECT * FROM positions WHERE status='closed' AND meta_label IS NOT NULL"
+        ).fetchall()
 
     def open_positions(self) -> list[sqlite3.Row]:
         cur = self._conn.execute(

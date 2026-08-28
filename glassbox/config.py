@@ -51,6 +51,8 @@ class GateCfg(BaseModel):
 class ManageCfg(BaseModel):
     credit_profit_take_pct: float
     stop_multiple_of_credit: float
+    debit_profit_take_pct: float
+    debit_stop_pct: float
     breakeven_trigger_pct: float
     min_hours_to_expiry: int
     flatten_all_at: str

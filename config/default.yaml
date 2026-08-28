@@ -29,8 +29,13 @@ gate:
   min_open_interest: 200
 
 manage:
-  credit_profit_take_pct: 50     # close credit structures at 50% of max profit
+  # Credit structures: bank half the premium rather than grinding the last of it
+  # out against accelerating gamma, and stop at twice the credit received.
+  credit_profit_take_pct: 50
   stop_multiple_of_credit: 2.0
+  # Debit structures: take profit at a full double, cut at half the debit paid.
+  debit_profit_take_pct: 100
+  debit_stop_pct: 50
   breakeven_trigger_pct: 60      # tighten stop to entry at 60% of target
   min_hours_to_expiry: 24
   flatten_all_at: "2026-09-03T15:55:00-04:00"   # Thu before close, ET
