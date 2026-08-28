@@ -133,6 +133,17 @@ class Trader:
         """
         signal_id = f"{item.symbol}-{item.id}"
 
+        # A signal that already produced a position must never produce another.
+        # The in-memory seen-news set dies with the process, the poller replays
+        # the last 15 minutes of news on startup, and the bandit's structure
+        # choice is stochastic — so a reprocessed signal can pick a different
+        # structure, mint a different client_order_id, and walk past both the
+        # broker's duplicate check and the gate's identical-structure check.
+        # The positions table is the durable memory of what was acted on.
+        if self.store.position_for_signal(signal_id) is not None:
+            return self._drop("duplicate_signal", item, "position already exists for this signal",
+                              signal_id=signal_id)
+
         if is_halted(self.store):
             return self._drop("halt", item, "system halted")
 

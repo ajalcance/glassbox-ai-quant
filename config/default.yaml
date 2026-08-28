@@ -38,6 +38,11 @@ execution:
   # close escalates: cancelled and resubmitted at a progressively worse price,
   # crossing further toward the market each attempt.
   close_retry_seconds: 60
+  # Every broker HTTP call gets a hard timeout. alpaca-py sets none, and a
+  # request without one blocks forever on a half-open socket — in the trader
+  # that wedges a thread; in the supervisor it silently disables every guard.
+  broker_connect_timeout_seconds: 10
+  broker_read_timeout_seconds: 30
   close_max_attempts: 4
   close_escalation_pct: 12   # each retry concedes this much more of the price
 

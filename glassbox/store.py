@@ -346,6 +346,17 @@ class Store:
         ).fetchone()
         return int(row["n"])
 
+    def position_for_signal(self, signal_id: str) -> sqlite3.Row | None:
+        """Any position ever opened from this signal, whatever its status.
+
+        The durable half of news deduplication: the in-memory seen set dies
+        with the process, but a signal that already became a position must not
+        become a second one when the poller replays it after a restart.
+        """
+        return self._conn.execute(
+            "SELECT * FROM positions WHERE signal_id=? LIMIT 1", (signal_id,)
+        ).fetchone()
+
     def get_position(self, position_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
             "SELECT * FROM positions WHERE position_id=?", (position_id,)

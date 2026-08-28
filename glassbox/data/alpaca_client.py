@@ -11,14 +11,42 @@ from alpaca.data.historical.news import NewsClient
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.trading.client import TradingClient
 
-from glassbox.config import require_env
+from glassbox.config import load_config, require_env
+
+
+def _with_default_timeout(client):
+    """Give every HTTP call this client makes a hard timeout.
+
+    alpaca-py never sets one, and a requests call without a timeout blocks
+    forever on a half-open socket. In the trader that wedges a thread until the
+    supervisor notices the stale heartbeat; in the supervisor it would silently
+    stop every guard from evaluating — the watchdog is the one process that can
+    least afford to hang.
+    """
+    cfg = load_config()
+    timeout = (
+        cfg.execution.broker_connect_timeout_seconds,
+        cfg.execution.broker_read_timeout_seconds,
+    )
+    session = client._session
+    original = session.request
+
+    def request_with_timeout(*args, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = timeout
+        return original(*args, **kwargs)
+
+    session.request = request_with_timeout
+    return client
 
 
 def trading_client() -> TradingClient:
-    return TradingClient(
-        api_key=require_env("ALPACA_API_KEY_ID"),
-        secret_key=require_env("ALPACA_API_SECRET_KEY"),
-        paper=True,  # hard-pinned: this codebase never touches live endpoints
+    return _with_default_timeout(
+        TradingClient(
+            api_key=require_env("ALPACA_API_KEY_ID"),
+            secret_key=require_env("ALPACA_API_SECRET_KEY"),
+            paper=True,  # hard-pinned: this codebase never touches live endpoints
+        )
     )
 
 
@@ -32,30 +60,39 @@ def supervisor_trading_client() -> TradingClient:
     kill switch — that holds either way. Distinct credentials, when available,
     are defence in depth on top of it.
     """
-    return TradingClient(
-        api_key=os.environ.get("SUPERVISOR_ALPACA_API_KEY_ID") or require_env("ALPACA_API_KEY_ID"),
-        secret_key=os.environ.get("SUPERVISOR_ALPACA_API_SECRET_KEY")
-        or require_env("ALPACA_API_SECRET_KEY"),
-        paper=True,
+    return _with_default_timeout(
+        TradingClient(
+            api_key=os.environ.get("SUPERVISOR_ALPACA_API_KEY_ID")
+            or require_env("ALPACA_API_KEY_ID"),
+            secret_key=os.environ.get("SUPERVISOR_ALPACA_API_SECRET_KEY")
+            or require_env("ALPACA_API_SECRET_KEY"),
+            paper=True,
+        )
     )
 
 
 def stock_data_client() -> StockHistoricalDataClient:
-    return StockHistoricalDataClient(
-        api_key=require_env("ALPACA_API_KEY_ID"),
-        secret_key=require_env("ALPACA_API_SECRET_KEY"),
+    return _with_default_timeout(
+        StockHistoricalDataClient(
+            api_key=require_env("ALPACA_API_KEY_ID"),
+            secret_key=require_env("ALPACA_API_SECRET_KEY"),
+        )
     )
 
 
 def option_data_client() -> OptionHistoricalDataClient:
-    return OptionHistoricalDataClient(
-        api_key=require_env("ALPACA_API_KEY_ID"),
-        secret_key=require_env("ALPACA_API_SECRET_KEY"),
+    return _with_default_timeout(
+        OptionHistoricalDataClient(
+            api_key=require_env("ALPACA_API_KEY_ID"),
+            secret_key=require_env("ALPACA_API_SECRET_KEY"),
+        )
     )
 
 
 def news_client() -> NewsClient:
-    return NewsClient(
-        api_key=require_env("ALPACA_API_KEY_ID"),
-        secret_key=require_env("ALPACA_API_SECRET_KEY"),
+    return _with_default_timeout(
+        NewsClient(
+            api_key=require_env("ALPACA_API_KEY_ID"),
+            secret_key=require_env("ALPACA_API_SECRET_KEY"),
+        )
     )

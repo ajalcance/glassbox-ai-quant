@@ -217,6 +217,36 @@ def test_full_pipeline_places_an_order(store, audit):
     assert store.open_positions(), "position must be recorded before submission"
 
 
+def test_replayed_signal_cannot_open_a_second_position(store, audit):
+    """The poller replays the last 15 minutes of news after a restart, the
+    in-memory seen set is gone, and the bandit's structure choice is stochastic
+    — so a replayed signal could mint a different client_order_id and pass every
+    downstream duplicate check. The positions table is the durable memory."""
+    router = StubRouter()
+    t = make_trader(store, audit, router=router)
+    assert t.process_news(news(), market()).traded
+    assert len(router.submitted) == 1
+
+    # Same story arrives again in a fresh process: new Trader, same store.
+    router2 = StubRouter()
+    t2 = make_trader(store, audit, router=router2)
+    outcome = t2.process_news(news(), market())
+    assert not outcome.traded
+    assert "already exists" in outcome.reason
+    assert router2.submitted == [], "replayed signal must never reach the router"
+    drops = [r for r in _audit_records(audit) if r.get("stage") == "duplicate_signal"]
+    assert drops and drops[-1]["signal_id"] == "AAPL-n1"
+
+
+def test_position_for_signal_lookup(store):
+    assert store.position_for_signal("AAPL-n1") is None
+    store.upsert_position("pos-AAPL-n1", signal_id="AAPL-n1", underlying="AAPL",
+                          kind="bull_put_spread", legs_json="[]", qty=1,
+                          max_loss=100.0, status="closed")
+    row = store.position_for_signal("AAPL-n1")
+    assert row is not None and row["position_id"] == "pos-AAPL-n1"
+
+
 def test_every_stage_is_audited(store, audit):
     t = make_trader(store, audit)
     t.process_news(news(), market())
