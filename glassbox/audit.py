@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 GENESIS = "0" * 64
@@ -39,7 +39,7 @@ class AuditLog:
 
     def append(self, kind: str, payload: dict) -> dict:
         """Append one record and return it (including its record_id)."""
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         path = self._path_for(ts)
         if self._prev_hash is None:
             self._prev_hash = self._last_hash(path)
