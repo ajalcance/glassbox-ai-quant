@@ -101,6 +101,37 @@ rather than silent agreement.
 ## Infrastructure
 DigitalOcean droplet 2GB/1vCPU ($12/mo hourly ≈ $3/week), NYC, Ubuntu 24.04. Docker Compose: `trader` · `supervisor` · `dashboard` + Caddy TLS. UFW 22/80/443. Secrets via `.env` on host only. Models train locally; frozen artifacts ship. Total run cost ≲ $15.
 
+## Testing and drills
+
+Everything is unit-tested and the pipeline has run end to end against live data,
+but **no order has ever actually filled**. Placing an unfillable order and
+cancelling it exercises submission; it does not exercise fills, position state,
+barrier management, closing, P&L realisation, labelling, or any of the learning
+that depends on a closed position. Those paths are unproven until a real trade
+completes.
+
+Drills run on the **development account** (`PA3CYQV2PBDK`). The brief permits
+"any paper account you like during development"; the contest account is created
+fresh and only ever sees contest trading.
+
+| # | Drill | Proves |
+|---|---|---|
+| 1 | **Round trip** | A marketable spread fills, position is recorded, reconciliation stays clean, the manager evaluates it, the close fills, P&L is realised, the outcome is labelled, the bandit posterior updates and a training row appears |
+| 2 | **Supervisor flatten** | With a real position open, the kill switch causes the supervisor to actually close it |
+| 3 | **Reconciliation divergence** | An induced mismatch between local state and the broker halts trading |
+| 4 | **Deadline flatten** | A near-term deadline closes everything, including a winning position |
+| 5 | **Unattended session** | The full stack survives a live session with nobody watching |
+
+Objective is mechanical correctness, not P&L. A drill that loses a few dollars
+and proves the close path works is a success.
+
+### Account timing
+
+The contest account must exist **before live trading**, not at submission. The
+submission is judged on the trading activity in that account, so an account
+created on the final day has nothing to judge. Created Monday night, live from
+Tuesday.
+
 ## Build schedule
 
 | Day | Ship |
