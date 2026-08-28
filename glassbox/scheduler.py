@@ -54,7 +54,41 @@ def _run_module(*args: str) -> int:
     return proc.returncode
 
 
+def _resolve_predictions() -> int:
+    """Score analyst estimates whose horizon has elapsed."""
+    from pathlib import Path
+
+    from glassbox import predictions
+    from glassbox.data.alpaca_client import (
+        option_data_client,
+        stock_data_client,
+        trading_client,
+    )
+    from glassbox.data.market import MarketData
+
+    cfg = load_config()
+    store = Store(cfg.paths.db)
+    try:
+        data = MarketData(
+            trading_client=trading_client(),
+            stock_client=stock_data_client(),
+            option_client=option_data_client(),
+            store=store,
+            root=Path("."),
+        )
+        n = predictions.resolve_due(store, data)
+        calib = predictions.calibration(store)
+        print(f"scored {n} prediction(s)")
+        if calib:
+            print(f"  calibration: {calib.as_dict()}")
+        return 0
+    finally:
+        store.close()
+
+
 JOBS: tuple[Job, ...] = (
+    # Before the report, so the day's summary reflects estimates already scored.
+    Job("resolve_predictions", 16, 10, _resolve_predictions),
     # Fifteen minutes after the close, so late fills are settled before the day
     # is summarised.
     Job("nightly_report", 16, 15, lambda: _run_module("glassbox.report.run")),

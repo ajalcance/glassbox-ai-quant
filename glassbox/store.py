@@ -48,6 +48,27 @@ CREATE TABLE IF NOT EXISTS positions (
     realized_pnl  REAL
 );
 
+CREATE TABLE IF NOT EXISTS predictions (
+    prediction_id      TEXT PRIMARY KEY,
+    signal_id          TEXT,
+    symbol             TEXT NOT NULL,
+    predicted_at       TEXT NOT NULL,
+    spot_at_prediction REAL NOT NULL,
+    expected_move_pct  REAL NOT NULL,
+    direction          TEXT NOT NULL,
+    confidence         REAL,
+    horizon_hours      REAL NOT NULL,
+    implied_move_pct   REAL,
+    resolve_after      TEXT NOT NULL,
+    traded             INTEGER NOT NULL DEFAULT 0,
+    resolved_at        TEXT,
+    actual_move_pct    REAL,
+    actual_signed_pct  REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_unresolved
+    ON predictions(resolved_at, resolve_after);
+
 CREATE TABLE IF NOT EXISTS bandit_state (
     arm        TEXT NOT NULL,
     regime     TEXT NOT NULL,
@@ -206,6 +227,45 @@ class Store:
         return self._conn.execute(
             "SELECT * FROM positions WHERE status='closed' AND meta_label IS NOT NULL"
         ).fetchall()
+
+    # ---- predictions ------------------------------------------------------
+    def record_prediction(self, prediction_id: str, **fields) -> None:
+        """Every analyst estimate, whether or not it became a trade.
+
+        Vetoed and untraded signals are the majority of the sample and are just
+        as informative about whether the model over-estimates, so they are kept.
+        """
+        cols = ", ".join(["prediction_id", *fields])
+        marks = ",".join("?" * (len(fields) + 1))
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO predictions ({cols}) VALUES ({marks})",
+            (prediction_id, *fields.values()),
+        )
+
+    def due_predictions(self, now_iso: str, limit: int = 200) -> list[sqlite3.Row]:
+        """Predictions whose horizon has elapsed and which are not yet scored."""
+        return self._conn.execute(
+            "SELECT * FROM predictions WHERE resolved_at IS NULL AND resolve_after <= ? "
+            "ORDER BY resolve_after LIMIT ?",
+            (now_iso, limit),
+        ).fetchall()
+
+    def resolve_prediction(
+        self, prediction_id: str, actual_move_pct: float, actual_signed_pct: float
+    ) -> None:
+        self._conn.execute(
+            "UPDATE predictions SET resolved_at=?, actual_move_pct=?, actual_signed_pct=? "
+            "WHERE prediction_id=?",
+            (_now(), actual_move_pct, actual_signed_pct, prediction_id),
+        )
+
+    def resolved_predictions(self) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM predictions WHERE resolved_at IS NOT NULL"
+        ).fetchall()
+
+    def mark_prediction_traded(self, signal_id: str) -> None:
+        self._conn.execute("UPDATE predictions SET traded=1 WHERE signal_id=?", (signal_id,))
 
     # ---- bandit -----------------------------------------------------------
     def bandit_posteriors(self, regime: str) -> dict[str, tuple[float, float, int]]:

@@ -375,6 +375,35 @@ class MarketData:
             return None
         return abs(now - reference) / reference * 100
 
+    def measure_move(self, symbol: str, start, end) -> tuple[float, float] | None:
+        """Signed and absolute percentage move between two past times.
+
+        Used to score a prediction after its horizon has elapsed, so it reads
+        bars across the window rather than comparing against the live quote —
+        the job may run well after the horizon closed.
+        """
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+
+        try:
+            bars = self.stock_client.get_stock_bars(
+                StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=TimeFrame.Minute,
+                    start=start,
+                    end=end,
+                )
+            ).data.get(symbol, [])
+        except Exception:  # noqa: BLE001 -- unmeasurable is not zero
+            return None
+        if len(bars) < 2:
+            return None
+        first, last = float(bars[0].open), float(bars[-1].close)
+        if first <= 0:
+            return None
+        signed = (last - first) / first * 100
+        return signed, abs(signed)
+
     def forecast_move_pct(self, symbol: str, hours_to_expiry: float) -> float | None:
         """The move the volatility model expects over the option's life.
 

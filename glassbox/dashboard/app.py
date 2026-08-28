@@ -20,6 +20,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 
+from glassbox import predictions
 from glassbox.clock import now_utc
 from glassbox.config import load_config
 from glassbox.dashboard.audit_reader import (
@@ -71,6 +72,7 @@ def state() -> dict:
             min_samples=cfg.ml.min_training_samples,
         )
         bandit = ThompsonBandit(store)
+        calibration = predictions.calibration(store)
         halt = store.get_state(HALT_KEY) or ""
         heartbeat = store.get_state("trader_heartbeat")
 
@@ -103,6 +105,7 @@ def state() -> dict:
                 },
                 "bandit": bandit.summary(),
                 "pnl_by_arm": pnl_by_arm(store),
+                "analyst_calibration": calibration.as_dict() if calibration else None,
             },
             "health": {
                 "halted": bool(halt),

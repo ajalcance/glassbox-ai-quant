@@ -216,6 +216,25 @@ class Trader:
                 "detail": edge.detail,
             },
         )
+        # Recorded whether or not this becomes a trade. Untraded signals are
+        # most of the sample and say just as much about whether the analyst
+        # over-estimates, which is what every ratio threshold rests on.
+        try:
+            from glassbox import predictions
+
+            predictions.record(
+                self.store,
+                signal_id=signal_id,
+                symbol=item.symbol,
+                spot=spot,
+                view=view,
+                implied_move_pct=edge.implied_move_pct,
+                now=self.clock(),
+            )
+        except Exception as e:  # noqa: BLE001 -- instrumentation must never be
+            # able to prevent or alter a trading decision.
+            self.audit.append("prediction_record_error", {"signal_id": signal_id, "error": str(e)})
+
         if not edge.tradable:
             return Outcome("edge", False, edge.detail, signal_id)
 

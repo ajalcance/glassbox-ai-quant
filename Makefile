@@ -34,7 +34,9 @@ drill-recon: ## induce a reconciliation divergence (places no orders)
 	uv run python -m glassbox.drills reconcile
 drill-clean: ## close everything and clear drill state
 	uv run python -m glassbox.drills cleanup
-calibrate:   ## show observed edge-ratio and VRP distributions from the audit log
+score:       ## score analyst estimates whose horizon has elapsed
+	uv run python -m glassbox.scheduler --force resolve_predictions
+calibrate:   ## analyst bias plus observed edge-ratio and VRP distributions
 	uv run python -m glassbox.calibrate
 preflight:   ## assert account preconditions
 	uv run python -m glassbox.preflight

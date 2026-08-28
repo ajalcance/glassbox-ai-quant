@@ -117,6 +117,13 @@ def collect(audit_dir: str | Path, day: date | None = None) -> DayStats:
     return s
 
 
+def analyst_calibration(store) -> dict | None:
+    from glassbox import predictions
+
+    calib = predictions.calibration(store)
+    return calib.as_dict() if calib else None
+
+
 def learning_state(cfg, store) -> dict:
     from glassbox.ml.bandit import ThompsonBandit
     from glassbox.ml.metalabel import MetaLabeler
@@ -132,6 +139,7 @@ def learning_state(cfg, store) -> dict:
             "min_samples": meta.min_samples,
         },
         "bandit": ThompsonBandit(store).summary(),
+        "analyst_calibration": analyst_calibration(store),
     }
 
 
@@ -222,6 +230,18 @@ def render_markdown(stats: DayStats, learning: dict, prose: str, cli_snapshot: d
         ),
         f"- Bandit: {len(learning['bandit'])} arm/regime cells with history",
     ]
+    calib = learning.get("analyst_calibration")
+    if calib:
+        lines.append(
+            f"- Analyst: {calib['n']} scored estimate(s), mean expected "
+            f"{calib['mean_expected_pct']:.2f}% against {calib['mean_actual_pct']:.2f}% "
+            f"actual (bias {calib['bias']:.2f}x)"
+        )
+        if calib["direction_accuracy"] is not None:
+            lines.append(
+                f"  - direction {calib['direction_accuracy']:.0%} correct over "
+                f"{calib['directional_n']} directional calls"
+            )
     for arm in learning["bandit"]:
         lines.append(
             f"  - `{arm['arm']}` in `{arm['regime']}`: {arm['pulls']} pulls, "

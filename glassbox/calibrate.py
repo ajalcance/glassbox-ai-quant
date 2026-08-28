@@ -84,6 +84,41 @@ def main() -> int:
 
     print(f"Edge-test calibration — {len(records)} evaluations over {args.days} day(s)")
 
+    # Analyst bias first: it recentres every ratio below it. A threshold of 1.3
+    # means nothing until you know whether the numerator is systematically
+    # inflated.
+    from glassbox import predictions
+    from glassbox.store import Store
+
+    store = Store(cfg.paths.db)
+    try:
+        calib = predictions.calibration(store)
+    finally:
+        store.close()
+
+    print("\nanalyst calibration")
+    if calib is None:
+        print("  no scored predictions yet — they resolve once their horizon elapses")
+    else:
+        print(
+            f"  n={calib.n}  mean expected {calib.mean_expected:.2f}%  "
+            f"mean actual {calib.mean_actual:.2f}%"
+        )
+        print(f"  bias {calib.bias:.2f}x  (>1 means the analyst over-estimates)")
+        if calib.direction_accuracy is not None:
+            print(
+                f"  direction {calib.direction_accuracy:.0%} correct "
+                f"over {calib.directional_n} directional calls"
+            )
+        if calib.n >= 10 and abs(calib.bias - 1) > 0.25:
+            print(
+                f"  -> a fairly-priced signal scores about {calib.suggested_centre:.2f}, "
+                f"not 1.0. Thresholds anchored at 1.0 are measuring the model's "
+                f"optimism, not a mispricing."
+            )
+        elif calib.n < 10:
+            print(f"  (n={calib.n} is too few to act on)")
+
     ratios = [float(r["ratio"]) for r in records if r.get("ratio")]
     _report(
         "expected / implied",

@@ -14,6 +14,7 @@ Most retail systems have three of these. Professional grade is having all eleven
 | 8 | **Account guards** | Separate supervisor process with its own client and connection pool: −2% daily halt, −6% max-DD halt (manual reset), loss-streak size halving, kill switch (file + CLI), 90s heartbeat flatten. |
 | 9 | **Reconciliation** | Local vs broker vs sum-of-fills every cycle. Mismatch → HALT until explained. State rebuilds from broker + audit log on boot. **Option assignment and expiration events** (`OPASN`/`OPEXP`) are polled separately, because an assigned short leg becomes stock and would otherwise leave position state quietly wrong. |
 | 10 | **Audit log** | Append-only hash-chained JSONL, one record per decision (inputs, LLM rationale + prompt hash, edge numbers, gate results, fills, exits, P&L). Doubles as ML training set and demo material. |
+| 10b | **Analyst scoring** | Every estimate is recorded when made — traded or not — and scored once its horizon elapses. Every entry threshold is a ratio involving the expected move, so all of them rest on whether the analyst's numbers mean what they appear to |
 | 11 | **Validation** | No backtester (deliberate — LLM look-ahead bias lives in weights). Instead: replay harness for warm-start only, hypothesis property tests on the gate, chaos tests on execution, automated look-ahead audit. |
 
 ## Bandit arms (all defined-risk by construction)

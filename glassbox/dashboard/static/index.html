@@ -151,6 +151,8 @@
       </div>
       <div class="row"><span class="k">Bandit cells explored</span>
         <span class="v" id="arms">—</span></div>
+      <div class="row"><span class="k">Analyst bias</span>
+        <span class="v" id="bias">—</span></div>
     </div>
   </div>
 </div>
@@ -235,6 +237,19 @@ function renderState(s) {
   $("metan").textContent = `${m.n_samples} / ${m.min_samples} needed`;
   setBar($("metabar"), m.min_samples ? m.n_samples / m.min_samples : 0);
   $("arms").textContent = s.learning.bandit.length;
+
+  const cal = s.learning.analyst_calibration;
+  const biasEl = $("bias");
+  if (!cal) {
+    biasEl.textContent = "not scored yet";
+    biasEl.title = "estimates score once their horizon elapses";
+  } else {
+    biasEl.textContent = `${cal.bias.toFixed(2)}x over ${cal.n}`;
+    biasEl.title = cal.bias > 1
+      ? `expects ${cal.mean_expected_pct}%, gets ${cal.mean_actual_pct}% — over-estimating`
+      : `expects ${cal.mean_expected_pct}%, gets ${cal.mean_actual_pct}%`;
+    biasEl.style.color = Math.abs(cal.bias - 1) > 0.4 ? "var(--warn)" : "";
+  }
 
   $("bandit").innerHTML = s.learning.bandit.length
     ? s.learning.bandit.map(b => `<tr><td>${esc(b.arm)}</td><td>${esc(b.regime)}</td>
