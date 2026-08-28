@@ -40,3 +40,8 @@ local/
 # Soak output — the harnesses in soak/ are committed, their results are not
 soak-results/
 soak/soak-results/
+
+# Generated nightly reports. These are runtime evidence, written to
+# data/reports/ (on the persisted volume); the bare reports/ path is the
+# pre-move location and is ignored so a stale code path cannot commit output.
+/reports/
