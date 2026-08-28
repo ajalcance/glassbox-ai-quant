@@ -81,12 +81,31 @@ def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
         def close_all_positions(self, cancel_orders=True):
             return []
 
-    (tmp_path / "KILL").touch()
+    from glassbox.supervisor.guards import KILL_SWITCH_FILE
+
+    kill = tmp_path / KILL_SWITCH_FILE
+    kill.parent.mkdir(parents=True, exist_ok=True)
+    kill.touch()
     client = FakeClient()
     for _ in range(3):
         action = supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
         assert action is GuardAction.HALT_HARD
     assert client.flattens == 3, "each tick flattens; the loop must not exit"
+
+
+def test_kill_switch_lives_on_the_shared_data_volume(tmp_path):
+    """The compose stack mounts one `state` volume at /app/data in every
+    container and nothing mounts /app itself. A sentinel outside data/ would be
+    invisible inside docker — an emergency stop that silently does nothing."""
+    from glassbox.supervisor.guards import KILL_SWITCH_FILE
+    from glassbox.supervisor.run import kill_switch_engaged
+
+    assert KILL_SWITCH_FILE.startswith("data/")
+    assert not kill_switch_engaged(tmp_path)
+    kill = tmp_path / KILL_SWITCH_FILE
+    kill.parent.mkdir(parents=True, exist_ok=True)
+    kill.touch()
+    assert kill_switch_engaged(tmp_path)
 
 
 # --- drawdown reference ---------------------------------------------------

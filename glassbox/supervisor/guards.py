@@ -14,7 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-KILL_SWITCH_FILE = "KILL"
+# The sentinel lives under data/ because that is the one directory every
+# process shares in every deployment: host runs see the repo's data/, and the
+# compose stack mounts the same `state` volume at /app/data in every container.
+# A root-level file would be invisible inside docker (nothing mounts /app
+# itself), turning the emergency stop into a no-op exactly where it matters.
+KILL_SWITCH_FILE = "data/KILL"
 PEAK_EQUITY_KEY = "peak_equity"
 SESSION_START_EQUITY_KEY = "session_start_equity"
 LOSS_STREAK_KEY = "loss_streak"

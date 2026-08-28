@@ -28,7 +28,8 @@ models/*.pkl
 node_modules/
 dist/
 
-# Kill switch sentinel — operational state, never committed
+# Kill switch sentinel — operational state, never committed. Lives at
+# data/KILL (covered by /data/ above); this guards any legacy root-level file.
 KILL
 
 # Local tooling

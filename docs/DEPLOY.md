@@ -34,12 +34,15 @@ data going straight to live orders is how day one becomes day zero.
 ## Kill switch
 
 ```bash
-make kill      # touch KILL — supervisor flattens and halts within ~15s
-make resume    # rm KILL
+make kill      # touch data/KILL — supervisor flattens and halts within ~15s
+make resume    # rm data/KILL
 ```
 
 The switch is a file, not an API call, so it works even when the trader is
-unresponsive. The supervisor polls for it independently.
+unresponsive. The supervisor polls for it independently. It lives at
+`data/KILL` because that directory is the shared `state` volume in the compose
+stack: one touch is seen by every container as well as host-run processes
+(`make kill` writes both the host file and, when the stack is up, the volume).
 
 ## On a server (optional)
 

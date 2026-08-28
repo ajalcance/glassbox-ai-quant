@@ -249,8 +249,10 @@ def drill_flatten() -> int:
     """Open a position, engage the kill switch, verify the supervisor closes it."""
     from pathlib import Path
 
+    from glassbox.supervisor.guards import KILL_SWITCH_FILE
+
     cfg, store, audit, client, data = _ctx()
-    kill = Path("KILL")
+    kill = Path(KILL_SWITCH_FILE)
     try:
         _require_market_open(client)
         print("FLATTEN DRILL")
@@ -372,7 +374,10 @@ def drill_cleanup() -> int:
         store.set_state(HALT_KEY, "")
         from pathlib import Path
 
-        Path("KILL").unlink(missing_ok=True)
+        from glassbox.supervisor.guards import KILL_SWITCH_FILE
+
+        Path(KILL_SWITCH_FILE).unlink(missing_ok=True)
+        Path("KILL").unlink(missing_ok=True)  # legacy root-level sentinel
         print("  halt cleared, kill switch cleared")
         return 0
     finally:

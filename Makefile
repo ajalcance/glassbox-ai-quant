@@ -41,10 +41,18 @@ calibrate:   ## analyst bias plus observed edge-ratio and VRP distributions
 preflight:   ## assert account preconditions
 	uv run python -m glassbox.preflight
 
+# The sentinel lives at data/KILL: host processes read the repo's data/, and
+# the compose stack shares one `state` volume at /app/data — so the exec below
+# reaches every container at once. Both paths are written so the stop works
+# whether the stack runs on the host, in docker, or both.
 kill:        ## ENGAGE the kill switch — halts trading, supervisor flattens
-	@touch KILL && echo "kill switch ENGAGED — supervisor will flatten and halt"
+	@mkdir -p data && touch data/KILL
+	@docker compose exec -T supervisor touch /app/data/KILL 2>/dev/null || true
+	@echo "kill switch ENGAGED — supervisor will flatten and halt"
 resume:      ## clear the kill switch
-	@rm -f KILL && echo "kill switch cleared"
+	@rm -f data/KILL KILL
+	@docker compose exec -T supervisor rm -f /app/data/KILL 2>/dev/null || true
+	@echo "kill switch cleared"
 
 up:          ## start the full stack in docker
 	docker compose up -d --build
