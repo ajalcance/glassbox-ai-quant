@@ -59,6 +59,34 @@ supervisor heartbeat, halt reason, audit-chain verified) - **P&L by bandit arm**
 ## Reporting
 Nightly cron after US close: P&L, trades, vetoes + reasons, risk utilization, learning deltas; Fireworks large model writes the narrative. One markdown/day → dashboard + social post seed; Thursday's report drafts the required one-pager.
 
+## Additions found by auditing the MCP surface
+
+Reviewing the 72 tools Alpaca's MCP server exposes surfaced five capabilities
+the system was not using, two of which were real risk holes rather than missing
+features:
+
+1. **Corporate actions** — a short call in a name going ex-dividend carries
+   early-assignment risk, and a split changes contract terms mid-position. The
+   gate had sixteen checks and none asked whether something was about to happen
+   to the security itself. Now a blackout check.
+2. **Assignment detection** — an assigned short leg becomes stock, and position
+   reconciliation over option symbols would not cleanly catch it. Polled
+   separately as `OPASN`/`OPEXP` activity.
+3. **Broker portfolio history** — the max-drawdown guard measured from a peak
+   held in local state, so wiping the database reset the peak and silently
+   disabled the guard until a new one formed. The high-water mark now comes from
+   the broker.
+4. **Market calendar** — `minutes_to_close` assumed a 16:00 close; an early
+   close broke the arithmetic. No half-day falls inside the contest, but it is a
+   correctness gap and cheap to close.
+5. **Startup preflight** — options level and PDT status are asserted at boot
+   instead of discovered mid-session.
+
+Deliberately *not* taken: market movers as a signal feature (an unvalidated
+input to a model with no training data yet), and threshold tuning against
+historical expired-option trades (parameter fitting on history, which the design
+rules out elsewhere).
+
 ## MCP and CLI
 
 Both are used, each where it fits. MCP is the human-facing lane — `.mcp.json`
