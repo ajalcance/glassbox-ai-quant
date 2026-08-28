@@ -59,6 +59,33 @@ supervisor heartbeat, halt reason, audit-chain verified) - **P&L by bandit arm**
 ## Reporting
 Nightly cron after US close: P&L, trades, vetoes + reasons, risk utilization, learning deltas; Fireworks large model writes the narrative. One markdown/day → dashboard + social post seed; Thursday's report drafts the required one-pager.
 
+## Market regime and the economic calendar
+
+The news pipeline answers "is this stock mispriced". Two additions supply the
+context that question is asked in:
+
+**Regime layer.** A cross-asset risk read from instruments already on Alpaca —
+volatility term structure (VXX/VXZ), risk appetite (SPHB/SPLV), credit stress
+(HYG/LQD), breadth (SPY/RSP vs the universe) — each scored as a percentile
+against its own 60-day history and composited to one score in [0,1]. Regime
+never creates a trade: it scales size (multiplier in [0.4, 1.0]) and leans the
+VRP bounds toward selling premium when stress makes premium genuinely richer.
+Multiplicative, so it can veto toward zero but never inflate past the caps.
+Logged on every decision from the first tick, so by end of week there is
+evidence for whether it deserves promotion to a first-class signal.
+
+**Macro-event blackout.** The edge test compares a stock-specific expectation
+against a straddle that, near a scheduled macro release, carries embedded event
+premium — making everything look overpriced and steering the system into
+selling insurance right before the event. Contest week is a minefield: ISM +
+JOLTS on Sep 1, ADP on Sep 2, NFP on submission morning. Within a window before
+each high-impact release (default 2h before to 30min after), no new short
+premium; other entries are haircut. The release itself then generates news that
+flows through the existing pipeline against post-event straddles — so "trade
+the release" emerges from infrastructure we already have, after the dust
+settles rather than into it. Contest week uses a hand-verified table in config
+(zero dependencies, auditable); the interface takes a calendar API later.
+
 ## Additions found by auditing the MCP surface
 
 Reviewing the 72 tools Alpaca's MCP server exposes surfaced five capabilities
