@@ -43,6 +43,13 @@ class SizingCfg(BaseModel):
     drawdown_taper_floor: float
 
 
+class ExecutionCfg(BaseModel):
+    entry_fill_timeout_minutes: float
+    close_retry_seconds: float
+    close_max_attempts: int
+    close_escalation_pct: float
+
+
 class GateCfg(BaseModel):
     max_orders_per_minute: int
     max_new_positions_per_day: int
@@ -144,6 +151,7 @@ class Config(BaseModel):
     account: AccountCfg
     risk: RiskCfg
     sizing: SizingCfg
+    execution: ExecutionCfg
     gate: GateCfg
     manage: ManageCfg
     signal: SignalCfg

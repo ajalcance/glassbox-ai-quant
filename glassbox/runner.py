@@ -73,6 +73,14 @@ class DryRunRouter:
     def cancel(self, client_order_id, alpaca_order_id):
         self.audit.append("dry_run_cancel", {"client_order_id": client_order_id})
 
+    def poll(self, client_order_id):
+        """A dry-run order fills instantly at its limit, so the dry run
+        exercises the entire fill lifecycle rather than skipping it."""
+        for record in self.submitted:
+            if record["client_order_id"] == client_order_id:
+                return "filled", record["limit_price"]
+        return "canceled", None
+
 
 def build_universe(cfg) -> set[str]:
     """Liquid, optionable names. Deliberately small and static for the contest:
@@ -235,6 +243,10 @@ class Runner:
             new_positions_today=self.store.positions_opened_on(
                 now_utc().astimezone(MARKET_TZ).date().isoformat()
             ),
+            orders_last_minute=self.store.orders_created_since(
+                (now_utc() - timedelta(seconds=60)).isoformat()
+            ),
+            loss_streak=self.store.recent_loss_streak(),
         )
 
     # -- work -------------------------------------------------------------
@@ -258,6 +270,13 @@ class Runner:
     def tick(self) -> None:
         """Management, reconciliation, heartbeat. Runs whether or not news came."""
         self.trader.heartbeat()
+        try:
+            from glassbox.execution import lifecycle
+
+            for event in lifecycle.sync(self.trader, now_utc()):
+                print(f"[{now_utc():%H:%M:%S}] {event}")
+        except Exception as e:  # noqa: BLE001 -- a failed sync retries next tick
+            self.audit.append("lifecycle_error", {"error": f"{type(e).__name__}: {e}"})
         try:
             enforce(self.store, self.audit, self.trading.get_all_positions())
         except Exception as e:  # noqa: BLE001 -- a failed reconcile must not kill

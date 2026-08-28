@@ -29,6 +29,18 @@ sizing:
   meta_multiplier_floor: 0.4     # multiplier at p = min_meta_label_p
   meta_multiplier_ceiling: 1.0   # multiplier at p >= 0.85
 
+execution:
+  # Entry orders are patient but not infinite: a news thesis is time-sensitive,
+  # and an order still resting after this long is a fill the market declined at
+  # our price. It is cancelled and the position abandoned rather than chased.
+  entry_fill_timeout_minutes: 4
+  # Close orders are the opposite — we are obligated to get out. An unfilled
+  # close escalates: cancelled and resubmitted at a progressively worse price,
+  # crossing further toward the market each attempt.
+  close_retry_seconds: 60
+  close_max_attempts: 4
+  close_escalation_pct: 12   # each retry concedes this much more of the price
+
 gate:
   max_orders_per_minute: 5
   max_new_positions_per_day: 10

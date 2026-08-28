@@ -180,6 +180,26 @@ class Store:
         cur = self._conn.execute("SELECT * FROM orders WHERE client_order_id=?", (client_order_id,))
         return cur.fetchone()
 
+    def orders_created_since(self, iso_ts: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM orders WHERE created_at >= ?", (iso_ts,)
+        ).fetchone()
+        return int(row["n"])
+
+    def recent_loss_streak(self) -> int:
+        """Consecutive losses among the most recently closed positions."""
+        rows = self._conn.execute(
+            "SELECT meta_label FROM positions WHERE status='closed' "
+            "AND meta_label IS NOT NULL ORDER BY closed_at DESC LIMIT 10"
+        ).fetchall()
+        streak = 0
+        for r in rows:
+            if int(r["meta_label"]) == 0:
+                streak += 1
+            else:
+                break
+        return streak
+
     def orders_in_flight(self) -> list[sqlite3.Row]:
         cur = self._conn.execute("SELECT * FROM orders WHERE status IN ('pending','submitted')")
         return cur.fetchall()
@@ -304,6 +324,11 @@ class Store:
             (f"{day_prefix}%",),
         ).fetchone()
         return int(row["n"])
+
+    def get_position(self, position_id: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM positions WHERE position_id=?", (position_id,)
+        ).fetchone()
 
     def open_positions_for(self, underlying: str) -> list[sqlite3.Row]:
         return self._conn.execute(

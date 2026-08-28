@@ -795,18 +795,34 @@ class Trader:
         return replace(view, peak_pnl=peak)
 
     def _close(self, row, view: PositionView, decision, now: datetime) -> None:
+        """Submit the closing order. The position is *not* declared closed here.
+
+        A close that has been submitted is not yet a close that has happened:
+        recording it as done while the order rests would tell the book it is
+        flat while the broker still holds the legs. The lifecycle confirms the
+        fill, realises P&L from the actual price, and only then feeds the
+        learners — the loop closes on what happened, not on what we expected.
+        """
         from glassbox.execution.ids import close_order_id
 
         structure = self._structure_from_row(row)
         coid = close_order_id(view.position_id, str(decision.barrier))
         self.store.upsert_position(view.position_id, status="closing")
+        self.store.set_state(f"close_barrier:{view.position_id}", str(decision.barrier))
         self.router.submit_structure(
             structure, view.qty, view.current_price, coid, view.position_id, closing=True
         )
-        self.store.close_position(
-            view.position_id,
-            str(decision.barrier),
-            decision.label or 0,
-            decision.unrealized_pnl,
-            now.isoformat(),
-        )
+
+    def feed_learners(self, row, label: int) -> None:
+        """Reward the bandit for a realised outcome. Called by the lifecycle
+        once the closing fill is confirmed.
+
+        Worth recording: before the lifecycle existed this call existed nowhere
+        in the live path at all — only the drills rewarded the bandit, so in
+        live trading it would have sampled untouched priors all week while the
+        dashboard showed it as active.
+        """
+        if self.bandit is not None and row["regime"]:
+            from glassbox.ml.bandit import VolRegime
+
+            self.bandit.update(row["kind"], VolRegime(row["regime"]), won=bool(label))

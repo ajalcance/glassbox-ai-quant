@@ -112,8 +112,14 @@ class StubLlm:
 
 
 class StubRouter:
-    def __init__(self):
+    """Records intent like the real router so the lifecycle has something to
+    poll — the seam the real OrderRouter covers with store.record_order."""
+
+    def __init__(self, store=None):
         self.submitted = []
+        self.cancelled = []
+        self.store = store
+        self.clock = None
 
     def submit_structure(self, structure, qty, price, coid, position_id, closing=False):
         self.submitted.append(
@@ -126,19 +132,43 @@ class StubRouter:
                 "closing": closing,
             }
         )
+        if self.store is not None:
+            self.store.record_order(coid, "close" if closing else "open", [], price, position_id)
+            updates = {"status": "submitted", "alpaca_order_id": f"alp-{coid}"}
+            if self.clock is not None:
+                # The store stamps real wall-clock time; tests run at a fictional
+                # NOW, which would make every order look days old and expired.
+                updates["created_at"] = self.clock().isoformat()
+            self.store.update_order(coid, **updates)
         return type("O", (), {"id": f"alp-{len(self.submitted)}"})()
+
+    def poll(self, client_order_id):
+        """Instant fill at the limit, like the dry-run router: tests exercise
+        the full submit -> fill -> realise lifecycle, not a shortcut."""
+        for record in self.submitted:
+            if record["coid"] == client_order_id:
+                return "filled", record["price"]
+        return "canceled", None
+
+    def cancel(self, client_order_id, alpaca_order_id):
+        self.cancelled.append(client_order_id)
 
 
 def make_trader(store, audit, *, llm=None, data=None, router=None):
+    router = router or StubRouter()
+    if getattr(router, "store", None) is None:
+        router.store = store
+    clock = lambda: NOW
+    router.clock = clock
     return Trader(
         cfg=CFG,
         store=store,
         audit=audit,
-        router=router or StubRouter(),
+        router=router,
         news_filter=NewsFilter({"AAPL"}, CFG.signal),
         llm=llm or StubLlm(),
         market_data=data or StubData(),
-        clock=lambda: NOW,
+        clock=clock,
     )
 
 
@@ -153,6 +183,13 @@ def news(headline="Apple beats Q3 estimates and raises full-year guidance", **kw
     }
     base.update(kw)
     return NewsItem(**base)
+
+
+def settle(t, when=None):
+    """Confirm fills the way the runner tick does."""
+    from glassbox.execution import lifecycle
+
+    return lifecycle.sync(t, when or t.clock() if callable(t.clock) else NOW)
 
 
 def market(**kw):
@@ -293,7 +330,13 @@ def test_deadline_closes_and_labels(store, audit):
     t, _row = _open_a_position(store, audit)
     outcomes = t.manage_positions(NOW + timedelta(hours=1), deadline=NOW)
     assert len(outcomes) == 1
-    assert store.training_rows(), "a closed position must produce a training row"
+    row = store.open_positions()[0]
+    assert row["status"] == "closing", (
+        "a submitted close is not yet a close: the book must not claim to be "
+        "flat while the broker still holds the legs"
+    )
+    settle(t)
+    assert store.training_rows(), "a settled close must produce a training row"
     assert store.open_positions() == []
 
 
@@ -480,15 +523,20 @@ class AdvancingClock:
 
 
 def make_floor_trader(store, audit, router=None, clock=None):
+    router = router or StubRouter()
+    if getattr(router, "store", None) is None:
+        router.store = store
+    clock = clock or AdvancingClock()
+    router.clock = clock
     return Trader(
         cfg=CFG,
         store=store,
         audit=audit,
-        router=router or StubRouter(),
+        router=router,
         news_filter=NewsFilter({"AAPL"}, CFG.signal),
         llm=StubLlm(fairly_priced_view()),
         market_data=StubData(),
-        clock=clock or AdvancingClock(),
+        clock=clock,
     )
 
 
@@ -731,8 +779,9 @@ def test_contradicting_news_closes_the_position(store, audit):
 
     closed = t.check_contradiction("AAPL", bearish())
     assert closed == ["pos-AAPL"]
-    assert store.open_positions() == []
     assert router.submitted and router.submitted[-1]["closing"] is True
+    settle(t)
+    assert store.open_positions() == []
     rows = store.training_rows()
     assert rows and rows[0]["exit_barrier"] == "thesis_broken"
 
@@ -781,6 +830,7 @@ def test_contradiction_only_touches_the_named_symbol(store, audit):
     _open_thesis_position(store, direction="up", symbol="AAPL")
     _open_thesis_position(store, direction="up", symbol="MSFT")
     assert t.check_contradiction("AAPL", bearish()) == ["pos-AAPL"]
+    settle(t)
     assert {r["underlying"] for r in store.open_positions()} == {"MSFT"}
 
 
@@ -795,6 +845,7 @@ def test_contradiction_runs_from_the_entry_pipeline(store, audit):
     t = make_trader(store, audit)
     _open_thesis_position(store, direction="down")
     t.process_news(news(), market())  # stub analyst is bullish, confidence 0.85
+    settle(t)
 
     closed = store.training_rows()
     assert [r["exit_barrier"] for r in closed] == ["thesis_broken"]

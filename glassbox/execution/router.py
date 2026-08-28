@@ -166,6 +166,18 @@ class OrderRouter:
         )
         return order
 
+    def poll(self, client_order_id: str) -> tuple[str, float | None]:
+        """Terminal-or-not status of an order, and its fill price if filled.
+
+        Returns (status, filled_avg_price). Status is lowercased Alpaca status:
+        'filled', 'canceled', 'rejected', 'expired', or a live state such as
+        'new'/'accepted'/'partially_filled'.
+        """
+        order = self.breaker.call(lambda: self.client.get_order_by_client_id(client_order_id))
+        status = str(order.status).split(".")[-1].lower()
+        fill = order.filled_avg_price
+        return status, (float(fill) if fill is not None else None)
+
     def cancel(self, client_order_id: str, alpaca_order_id: str) -> None:
         try:
             self.breaker.call(lambda: self.client.cancel_order_by_id(alpaca_order_id))
