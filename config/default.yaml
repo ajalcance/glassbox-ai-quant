@@ -1,0 +1,59 @@
+# GlassBox AI Quant — all tunable constants live here, never in code.
+# Contest values. Fork for live use by changing this file, not the framework.
+
+account:
+  starting_equity: 100000        # contest requirement
+  paper: true
+
+risk:
+  r_per_trade_pct: 0.5           # base risk R as % of equity
+  max_loss_per_position_pct: 1.5
+  max_loss_per_underlying_pct: 3.0
+  portfolio_heat_pct: 6.0        # sum of max-loss across open positions
+  delta_dollars_band: 15000      # net |delta $| limit
+  daily_loss_halt_pct: 2.0       # supervisor: flatten + halt for session
+  max_drawdown_halt_pct: 6.0     # supervisor: flatten + halt, manual reset
+  loss_streak_half_size: 4       # consecutive losses before halving R
+  min_meta_label_p: 0.55         # below this, no trade
+
+sizing:
+  meta_multiplier_floor: 0.4     # multiplier at p = min_meta_label_p
+  meta_multiplier_ceiling: 1.0   # multiplier at p >= 0.85
+
+gate:
+  max_orders_per_minute: 5
+  max_new_positions_per_day: 10
+  skip_first_minutes: 5
+  skip_last_minutes: 10
+  max_spread_pct_of_mid: 5.0     # option liquidity check
+  min_open_interest: 200
+
+manage:
+  credit_profit_take_pct: 50     # close credit structures at 50% of max profit
+  stop_multiple_of_credit: 2.0
+  breakeven_trigger_pct: 60      # tighten stop to entry at 60% of target
+  min_hours_to_expiry: 24
+  flatten_all_at: "2026-09-03T15:55:00-04:00"   # Thu before close, ET
+
+signal:
+  novelty_window_hours: 72
+  min_confidence: 0.6
+  edge_ratio_debit: 1.3          # expected/implied above this -> long convexity
+  edge_ratio_credit: 0.7         # expected/implied below this -> short premium
+
+universe:
+  size: 50
+  min_option_volume: 1000
+
+llm:
+  provider: fireworks
+  base_url: "https://api.fireworks.ai/inference/v1"
+  analyst_model: "accounts/fireworks/models/qwen3-235b-a22b-instruct"   # confirm against live catalog
+  report_model: "accounts/fireworks/models/deepseek-v3"                  # confirm against live catalog
+  analyst_max_tokens: 600
+  timeout_seconds: 20
+
+paths:
+  db: "data/glassbox.db"
+  audit_dir: "audit"
+  models_dir: "models"
