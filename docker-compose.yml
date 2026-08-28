@@ -35,6 +35,13 @@ services:
     command: python -m glassbox.supervisor.run --interval 15
     depends_on: [trader]
 
+  scheduler:
+    <<: *common
+    container_name: glassbox-scheduler
+    # Jobs are declared in US Eastern and resolved through the same clock the
+    # trader uses. Never set a container TZ to "fix" this.
+    command: python -m glassbox.scheduler --interval 60
+
   dashboard:
     <<: *common
     container_name: glassbox-dashboard

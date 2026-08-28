@@ -63,6 +63,24 @@ sudo ufw allow OpenSSH && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw en
 Set `SITE_ADDRESS` to a domain and Caddy provisions TLS automatically. Leave it
 as `:80` for a bare IP.
 
+## Scheduled jobs
+
+The `scheduler` service runs the nightly report at 16:15 ET and refits the
+meta-labeler at 16:25 ET, weekdays only. Deliberately not cron: cron in a
+container loses the environment and the logs, and every time here is a *market*
+time — the operator is in Philippine time and the container is UTC, so a job
+expressed in either would fire on the wrong day. Jobs are declared in US Eastern
+and resolved through the same clock module the trader uses. **Do not set a
+container TZ to "fix" this.**
+
+Each job runs at most once per market day, tracked in the store, so a restart at
+20:00 does not re-run something that already fired at 16:15.
+
+```bash
+make report                                   # force today's report now
+uv run python -m glassbox.scheduler --once    # run anything currently due
+```
+
 ## Models
 
 Models are trained on your machine and shipped as read-only artifacts —

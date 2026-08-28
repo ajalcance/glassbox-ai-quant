@@ -19,6 +19,10 @@ dashboard:   ## serve the dashboard on :8847
 	uv run python -m glassbox.dashboard.app
 train:       ## fit the volatility model and refit the meta-labeler
 	uv run python -m glassbox.ml.train
+report:      ## write today's report now, ignoring the schedule
+	uv run python -m glassbox.scheduler --force nightly_report
+scheduler:   ## run the job scheduler (report + model refit)
+	uv run python -m glassbox.scheduler
 
 kill:        ## ENGAGE the kill switch — halts trading, supervisor flattens
 	@touch KILL && echo "kill switch ENGAGED — supervisor will flatten and halt"

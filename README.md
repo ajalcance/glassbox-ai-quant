@@ -53,6 +53,8 @@ uv run python -m glassbox.runner --dry-run   # full pipeline, live data, no orde
 uv run python -m glassbox.supervisor.run     # guards + kill switch (separate process)
 uv run python -m glassbox.dashboard.app      # dashboard on :8847
 uv run python -m glassbox.report.run         # nightly report + CLI cross-check
+uv run python -m glassbox.scheduler          # nightly report + model refit on schedule
+uv run python -m glassbox.verify_mcp         # verify the MCP integration
 ```
 
 Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.
@@ -61,8 +63,8 @@ Requires an Alpaca **paper** account (free, no funding) and a Fireworks API key.
 
 - **Trading API** (alpaca-py) — the trading path: chains, quotes, Greeks, atomic multi-leg orders
 - **News API** — the WebSocket stream the whole signal pipeline is driven by
-- **MCP server** — `.mcp.json` connects any MCP client so a person can inspect the account in plain language. The agent never routes an order through it; the deterministic gate is the only path to the broker
-- **CLI** — an independent second source of truth for the nightly cross-check. Different binary, different code path, its own auth, so a disagreement means something is genuinely wrong
+- **MCP server** (primary) — `.mcp.json` connects any MCP client so a person can inspect the account in plain language. Verified with `python -m glassbox.verify_mcp`: Alpaca MCP Server 3.4.7, 72 tools. The server *can* trade; the agent deliberately never routes an order through it, because the deterministic gate is the only path to the broker
+- **CLI** — an additional independent cross-check in the nightly report. Different binary, different code path, its own auth, so a disagreement means one of the two views of the account is genuinely wrong
 
 See [docs/MCP_AND_CLI.md](docs/MCP_AND_CLI.md), including a measured caveat about CLI reliability.
 
