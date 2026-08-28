@@ -12,12 +12,17 @@ That is the triple-barrier method: the exit is the training signal, so the
 meta-labeler learns from exactly the rule that governed the trade rather than
 from some separately invented target.
 
-Two additions on top of the barriers:
+On top of those three sit obligations — conditions under which we exit
+regardless of where P&L happens to be:
 
   * **Break-even**: once a position has earned most of its target, the stop
     moves to the entry price. A winner is never allowed to become a loser.
   * **Deadline**: everything is flattened before the submission cutoff. Holding
     unmanaged risk into a window you cannot supervise is not a strategy.
+  * **Expiry risk**: out before gamma accelerates into the final day.
+  * **Macro risk**: short premium is closed before a scheduled release. The
+    gate refuses to *open* one into an event; permitting the *hold* would guard
+    the front door and leave the back one open.
 
 This is a pure function. No broker calls, no clock reads — `now` is passed in.
 """
@@ -46,6 +51,7 @@ class Barrier(StrEnum):
     BREAKEVEN = "breakeven"
     DEADLINE = "deadline"
     EXPIRY_RISK = "expiry_risk"
+    MACRO_RISK = "macro_risk"
     NONE = "none"
 
 
@@ -135,7 +141,11 @@ def stop_level(view: PositionView, cfg) -> float:
 
 
 def evaluate_position(
-    view: PositionView, cfg, now: datetime, deadline: datetime | None = None
+    view: PositionView,
+    cfg,
+    now: datetime,
+    deadline: datetime | None = None,
+    macro_window=None,
 ) -> ManageDecision:
     """Decide whether to hold or close, and label the outcome if closing.
 
@@ -161,6 +171,20 @@ def evaluate_position(
             Barrier.EXPIRY_RISK,
             f"{view.hours_to_expiry:.0f}h to expiry < {cfg.manage.min_hours_to_expiry}h "
             f"— closing before gamma accelerates",
+            pnl,
+            label,
+        )
+
+    # The gate refuses to *open* short premium into a scheduled release. Holding
+    # one through the release is the identical exposure — a credit spread opened
+    # Monday with a two-day horizon sits straight through Tuesday's ISM print.
+    # Blocking the entry while permitting the hold would guard the front door
+    # and leave the back one open.
+    if macro_window is not None and getattr(macro_window, "active", False) and view.is_credit:
+        return ManageDecision(
+            Action.CLOSE,
+            Barrier.MACRO_RISK,
+            f"closing short premium before {macro_window.detail}",
             pnl,
             label,
         )

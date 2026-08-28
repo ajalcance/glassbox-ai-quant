@@ -119,6 +119,9 @@ floor:
   # A candidate must at least lean somewhere. Ratio within this distance of 1.0
   # is pure agreement with the market — there is no "best idea" in a coin flip.
   min_ratio_distance: 0.08
+  # A floor attempt can legitimately fail — stacked regime and macro haircuts
+  # can size it to zero. Conditions change, so it retries, but not every tick.
+  retry_after_minutes: 20
 
 universe:
   size: 50

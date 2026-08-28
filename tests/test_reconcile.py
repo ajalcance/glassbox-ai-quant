@@ -200,3 +200,49 @@ def test_no_activities_is_a_no_op(store, audit):
 
     assert check_assignments(store, audit, []) == ()
     assert not is_halted(store)
+
+
+# --- daily position counting ----------------------------------------------
+
+
+def test_positions_opened_today_excludes_carried_positions(store):
+    """The rate limit counts positions *opened today*. Carrying three overnight
+    would otherwise consume three of the day's ten slots without a new order."""
+    store.upsert_position(
+        "pos-yesterday",
+        underlying="SPY",
+        kind="bull_put_spread",
+        legs_json="[]",
+        qty=1,
+        max_loss=100.0,
+        status="open",
+        opened_at="2026-08-31T15:00:00+00:00",
+    )
+    store.upsert_position(
+        "pos-today",
+        underlying="QQQ",
+        kind="bull_put_spread",
+        legs_json="[]",
+        qty=1,
+        max_loss=100.0,
+        status="open",
+        opened_at="2026-09-01T15:00:00+00:00",
+    )
+    assert store.positions_opened_on("2026-09-01") == 1
+    assert store.positions_opened_on("2026-08-31") == 1
+
+
+def test_positions_opened_today_includes_ones_already_closed(store):
+    """A position opened and closed within the day still used a slot."""
+    store.upsert_position(
+        "pos-roundtrip",
+        underlying="SPY",
+        kind="bull_put_spread",
+        legs_json="[]",
+        qty=1,
+        max_loss=100.0,
+        status="closed",
+        opened_at="2026-09-01T14:00:00+00:00",
+    )
+    assert store.positions_opened_on("2026-09-01") == 1
+    assert store.open_positions() == []

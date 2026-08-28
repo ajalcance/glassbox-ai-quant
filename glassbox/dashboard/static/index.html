@@ -297,7 +297,15 @@ function decisionRow(d) {
       <span>implied <b>${(d.edge.implied_move_pct ?? 0).toFixed(2)}%</b></span>
       <span>ratio <b>${(d.edge.ratio ?? 0).toFixed(2)}</b></span>
       ${d.ml ? `<span>p(profit) <b>${(d.ml.meta_label_p ?? 0).toFixed(2)}</b></span>` : ""}
-      ${d.ml ? `<span>regime <b>${esc(d.ml.regime)}</b></span>` : ""}
+      ${d.ml ? `<span>vol regime <b>${esc(d.ml.regime)}</b></span>` : ""}
+      ${d.edge && d.edge.regime && d.edge.regime.score !== null
+        ? `<span>market <b>${d.edge.regime.detail.split(" ")[0]}</b></span>` : ""}
+      ${d.edge && d.edge.macro && d.edge.macro.active
+        ? `<span style="color:var(--warn)">macro <b>${esc(d.edge.macro.event)}</b></span>` : ""}
+      ${d.ml && /floor/.test(d.ml.context_detail || "")
+        ? `<span style="color:var(--accent)"><b>FLOOR TRADE</b></span>` : ""}
+      ${d.ml && d.ml.context_multiplier !== undefined && d.ml.context_multiplier < 0.999
+        ? `<span>size <b>${(d.ml.context_multiplier * 100).toFixed(0)}%</b></span>` : ""}
     </div>`;
   }
   return `<div class="dec">

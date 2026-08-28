@@ -595,3 +595,42 @@ def test_floor_size_is_halved(store, audit):
     assert ml, "floor trade must carry the floor size factor in its ml record"
     assert ml[-1]["context_multiplier"] <= 0.5 + 1e-9
     assert _json  # keep import used
+
+
+def test_floor_reentry_does_not_double_count_the_prediction(store, audit):
+    """A floor re-entry replays a view already recorded this morning. Recording
+    it twice would count one estimate twice and bias calibration toward whatever
+    the floor happened to pick."""
+    t = make_floor_trader(store, audit)
+    t.process_news(news(), market())
+    before = len(store.due_predictions("2099-01-01T00:00:00+00:00", limit=500))
+    assert before == 1
+
+    t.clock.afternoon()
+    t.maybe_floor_trade(market())
+    after = len(store.due_predictions("2099-01-01T00:00:00+00:00", limit=500))
+    assert after == before, "floor re-entry recorded a duplicate prediction"
+
+
+def test_failed_floor_attempt_backs_off_before_retrying(store, audit):
+    """Stacked haircuts can size a floor trade to zero. That legitimately fails
+    and is retried later — but not on every sixty-second tick, which would run
+    the pipeline a hundred times an afternoon and bury the audit log."""
+    router = StubRouter()
+    t = make_floor_trader(store, audit, router=router)
+    t.data._kill = True  # forces the gate to refuse
+    t.process_news(news(), market())
+    t.clock.afternoon()
+
+    first = t.maybe_floor_trade(market())
+    assert first is not None and not first.traded
+    assert store.get_state("floor_trade_date") is None
+
+    # Immediately after, the attempt is skipped entirely.
+    assert t.maybe_floor_trade(market()) is None
+
+    # Once the back-off elapses it tries again, and succeeds when conditions clear.
+    t.clock.at = t.clock.at + timedelta(minutes=CFG.floor.retry_after_minutes + 1)
+    t.data._kill = False
+    retried = t.maybe_floor_trade(market())
+    assert retried is not None and retried.traded

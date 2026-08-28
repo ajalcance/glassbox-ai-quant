@@ -95,6 +95,7 @@ class FloorCfg(BaseModel):
     after_time_et: str
     size_factor: float
     min_ratio_distance: float
+    retry_after_minutes: float
 
 
 class UniverseCfg(BaseModel):

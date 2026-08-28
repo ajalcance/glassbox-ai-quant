@@ -227,7 +227,14 @@ class Runner:
             equity=equity,
             daily_pnl_pct=100 * (equity - start) / start if start else 0.0,
             drawdown_pct=100 * (equity - peak) / peak if peak else 0.0,
-            new_positions_today=len(self.store.open_positions()),
+            # Positions *opened today*, not positions currently open. Carrying
+            # three overnight would otherwise consume three of the day's ten
+            # slots without a single new order, while positions opened and
+            # closed within the day would not count at all — wrong in both
+            # directions.
+            new_positions_today=self.store.positions_opened_on(
+                now_utc().astimezone(MARKET_TZ).date().isoformat()
+            ),
         )
 
     # -- work -------------------------------------------------------------

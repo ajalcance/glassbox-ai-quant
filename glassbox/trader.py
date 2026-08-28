@@ -245,21 +245,29 @@ class Trader:
         # Recorded whether or not this becomes a trade. Untraded signals are
         # most of the sample and say just as much about whether the analyst
         # over-estimates, which is what every ratio threshold rests on.
-        try:
-            from glassbox import predictions
+        #
+        # A floor re-entry is deliberately excluded: it replays a view already
+        # recorded this morning, so recording it again would count one estimate
+        # twice and bias the calibration toward whatever the floor happens to
+        # pick — the opposite of a representative sample.
+        if not getattr(self, "_floor_mode", False):
+            try:
+                from glassbox import predictions
 
-            predictions.record(
-                self.store,
-                signal_id=signal_id,
-                symbol=item.symbol,
-                spot=spot,
-                view=view,
-                implied_move_pct=edge.implied_move_pct,
-                now=self.clock(),
-            )
-        except Exception as e:  # noqa: BLE001 -- instrumentation must never be
-            # able to prevent or alter a trading decision.
-            self.audit.append("prediction_record_error", {"signal_id": signal_id, "error": str(e)})
+                predictions.record(
+                    self.store,
+                    signal_id=signal_id,
+                    symbol=item.symbol,
+                    spot=spot,
+                    view=view,
+                    implied_move_pct=edge.implied_move_pct,
+                    now=self.clock(),
+                )
+            except Exception as e:  # noqa: BLE001 -- instrumentation must never
+                # be able to prevent or alter a trading decision.
+                self.audit.append(
+                    "prediction_record_error", {"signal_id": signal_id, "error": str(e)}
+                )
 
         if not edge.tradable:
             # A signal refused ONLY for sitting inside the ratio band is a
@@ -410,6 +418,7 @@ class Trader:
     def manage_positions(self, now: datetime, deadline: datetime | None = None) -> list[Outcome]:
         """Walk every open position through the triple barrier."""
         outcomes = []
+        macro_window = self.macro_window()
         for row in self.store.open_positions():
             if row["status"] != "open":
                 continue
@@ -424,7 +433,7 @@ class Trader:
 
             peak = self.store.record_peak_pnl(row["position_id"], view.unrealized_pnl)
             view = self._with_peak(view, peak)
-            decision = evaluate_position(view, self.cfg, now, deadline)
+            decision = evaluate_position(view, self.cfg, now, deadline, macro_window)
             self.audit.append(
                 "manage",
                 {
@@ -519,6 +528,18 @@ class Trader:
         if self.store.positions_opened_on(today) > 0:
             return None  # organic flow already traded; the floor stands down
 
+        # A floor attempt that sizes to zero — stacked regime and macro
+        # haircuts can do that — legitimately fails and is retried later, since
+        # conditions change. Retrying every sixty-second tick would run the full
+        # pipeline a hundred times an afternoon and bury the audit log.
+        last = self.store.get_state("floor_attempt_at")
+        if last:
+            from datetime import datetime as _dt
+
+            age = (self.clock() - _dt.fromisoformat(last)).total_seconds() / 60
+            if age < self.cfg.floor.retry_after_minutes:
+                return None
+
         hour, minute = (int(x) for x in self.cfg.floor.after_time_et.split(":"))
         now_et = self.clock().astimezone(MARKET_TZ)
         if (now_et.hour, now_et.minute) < (hour, minute):
@@ -536,6 +557,7 @@ class Trader:
         # Re-enter the ordinary pipeline with the band relaxed and size halved.
         # Everything else — VRP, sizing caps, all 18 gate checks — applies in
         # full. The floor relaxes exactly one bar.
+        self.store.set_state("floor_attempt_at", self.clock().isoformat())
         self._floor_mode = True
         try:
             outcome = self.process_news(self._floor_item(item), market, view_override=view)

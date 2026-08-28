@@ -189,3 +189,65 @@ def test_every_close_produces_a_label():
     for v in cases:
         d = evaluate_position(v, CFG, LATER)
         assert d.should_close and d.label in (0, 1), f"unlabelled close: {d.barrier}"
+
+
+# --- macro exit -----------------------------------------------------------
+
+
+class FakeMacroWindow:
+    def __init__(self, active=True, detail="Nonfarm Payrolls in 90m"):
+        self.active = active
+        self.detail = detail
+
+
+def test_short_premium_is_closed_before_a_release():
+    """The gate refuses to open short premium into a release. Holding one
+    through it is the identical exposure — guarding the front door while leaving
+    the back one open would be no guard at all."""
+    d = evaluate_position(
+        credit_view(current_price=-1.00), CFG, LATER, macro_window=FakeMacroWindow()
+    )
+    assert d.should_close and d.barrier is Barrier.MACRO_RISK
+    assert "Nonfarm" in d.reason and d.label is not None
+
+
+def test_long_convexity_is_held_through_a_release():
+    """A debit position cannot be assigned and profits from a large move; the
+    release is not a reason to abandon it."""
+    d = evaluate_position(
+        debit_view(current_price=2.10), CFG, LATER, macro_window=FakeMacroWindow()
+    )
+    assert d.action is Action.HOLD
+
+
+def test_inactive_window_changes_nothing():
+    d = evaluate_position(
+        credit_view(current_price=-1.00),
+        CFG,
+        LATER,
+        macro_window=FakeMacroWindow(active=False),
+    )
+    assert d.action is Action.HOLD
+
+
+def test_deadline_still_outranks_the_macro_exit():
+    d = evaluate_position(
+        credit_view(current_price=-1.00),
+        CFG,
+        LATER,
+        deadline=OPENED,
+        macro_window=FakeMacroWindow(),
+    )
+    assert d.barrier is Barrier.DEADLINE
+
+
+def test_macro_exit_outranks_stop_and_target():
+    """Being flat for a known event is an obligation, not an opportunity."""
+    winner = evaluate_position(
+        credit_view(current_price=-0.10), CFG, LATER, macro_window=FakeMacroWindow()
+    )
+    loser = evaluate_position(
+        credit_view(current_price=-3.70), CFG, LATER, macro_window=FakeMacroWindow()
+    )
+    assert winner.barrier is Barrier.MACRO_RISK
+    assert loser.barrier is Barrier.MACRO_RISK
