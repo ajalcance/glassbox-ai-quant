@@ -1,0 +1,63 @@
+# GlassBox AI Quant — three processes, one image.
+#
+# The supervisor is deliberately a separate container with its own process and
+# its own broker session. If the trader wedges, deadlocks, or is OOM-killed, the
+# supervisor still reaches Alpaca to flatten the book. Putting them in one
+# container would give up exactly the property the design depends on.
+
+name: glassbox
+
+x-common: &common
+  image: glassbox:latest
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  volumes:
+    - state:/app/data
+    - audit:/app/audit
+    - ./models:/app/models:ro
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  trader:
+    <<: *common
+    container_name: glassbox-trader
+    # Start in dry-run. Going live is a deliberate act, not a default:
+    # set TRADER_MODE= (empty) in .env once you have watched a session.
+    command: python -m glassbox.runner ${TRADER_MODE:---dry-run}
+    stop_grace_period: 30s
+
+  supervisor:
+    <<: *common
+    container_name: glassbox-supervisor
+    command: python -m glassbox.supervisor.run --interval 15
+    depends_on: [trader]
+
+  dashboard:
+    <<: *common
+    container_name: glassbox-dashboard
+    command: >
+      python -m uvicorn glassbox.dashboard.app:app
+      --host 0.0.0.0 --port 8847 --log-level warning
+    expose: ["8847"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: glassbox-caddy
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    depends_on: [dashboard]
+
+volumes:
+  state:
+  audit:
+  caddy_data:
+  caddy_config:

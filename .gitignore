@@ -28,6 +28,9 @@ models/*.pkl
 node_modules/
 dist/
 
+# Kill switch sentinel — operational state, never committed
+KILL
+
 # Local tooling
 .claude/settings.local.json
 .DS_Store

@@ -73,6 +73,10 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
     )
 
     if verdict.action is GuardAction.CONTINUE:
+        already_halted = bool(store.get_state(HALT_KEY))
+        if already_halted:
+            print(f"[{now_utc():%H:%M:%S}] halted — {store.get_state(HALT_KEY)}")
+            return verdict.action
         # A watchdog that prints nothing when healthy is indistinguishable from
         # one that has silently died, so it always reports what it saw.
         print(
@@ -116,6 +120,7 @@ def main() -> int:
     audit.append("supervisor_start", {"interval": args.interval, "dry_run": args.dry_run})
     print(f"supervisor watching (interval={args.interval}s, dry_run={args.dry_run})")
 
+    halted = False
     try:
         while True:
             try:
@@ -128,9 +133,20 @@ def main() -> int:
                 action = GuardAction.CONTINUE
             if args.once:
                 return 0 if action is GuardAction.CONTINUE else 2
-            if action is GuardAction.HALT_HARD:
-                print("hard halt — supervisor exiting, manual reset required", file=sys.stderr)
-                return 2
+            if action is GuardAction.HALT_HARD and not halted:
+                # Stay alive rather than exit. Under a restart policy, exiting
+                # produces a crash loop that re-flattens every few seconds and
+                # reads as a broken system; and a supervisor that is gone cannot
+                # catch a position opened after the halt. It keeps watching,
+                # takes no further action, and waits for an operator.
+                halted = True
+                print(
+                    "hard halt — trading stopped, supervisor still watching. "
+                    "Clear the kill switch and restart the trader to resume.",
+                    file=sys.stderr,
+                )
+            elif action is not GuardAction.HALT_HARD:
+                halted = False
             time.sleep(args.interval)
     except KeyboardInterrupt:
         audit.append("supervisor_stop", {})

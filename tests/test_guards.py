@@ -56,3 +56,34 @@ def test_peak_equity_ratchets_up_only(store):
     assert update_peak_equity(store, 100_000) == 100_000
     assert update_peak_equity(store, 105_000) == 105_000
     assert update_peak_equity(store, 99_000) == 105_000, "peak must not fall"
+
+
+def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys):
+    """Under a restart policy, exiting on a hard halt produces a crash loop that
+    re-flattens every few seconds and reads as a broken system. The supervisor
+    must stay alive and keep watching instead."""
+    from glassbox.supervisor import run as supervisor_run
+
+    class FakeAccount:
+        equity = "100000"
+
+    class FakeClient:
+        def __init__(self):
+            self.flattens = 0
+
+        def get_account(self):
+            return FakeAccount()
+
+        def cancel_orders(self):
+            self.flattens += 1
+            return []
+
+        def close_all_positions(self, cancel_orders=True):
+            return []
+
+    (tmp_path / "KILL").touch()
+    client = FakeClient()
+    for _ in range(3):
+        action = supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+        assert action is GuardAction.HALT_HARD
+    assert client.flattens == 3, "each tick flattens; the loop must not exit"

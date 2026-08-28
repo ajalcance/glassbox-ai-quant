@@ -1,0 +1,23 @@
+# TLS is automatic when SITE_ADDRESS is a domain; :80 serves plain HTTP for a
+# bare IP. Set SITE_ADDRESS in .env.
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# The dashboard is read-only, but say so at the edge as well: nothing here
+	# should ever accept a write, and a proxy that only forwards safe methods
+	# is one more place that has to be changed before it could.
+	@unsafe not method GET HEAD OPTIONS
+	respond @unsafe "read-only" 405
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# SSE must not be buffered or the decision feed arrives in bursts.
+	reverse_proxy dashboard:8847 {
+		flush_interval -1
+	}
+}
