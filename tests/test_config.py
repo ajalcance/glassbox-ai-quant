@@ -26,3 +26,16 @@ def test_market_date_uses_eastern_not_local():
     assert parse_expiry("2026-09-18") == parse_expiry(
         datetime(2026, 9, 18, 16, 0, tzinfo=MARKET_TZ)
     )
+
+
+def test_supervisor_falls_back_to_main_credentials(monkeypatch):
+    """A paper account has one key pair; the supervisor must still start."""
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "PKTEST")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.delenv("SUPERVISOR_ALPACA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("SUPERVISOR_ALPACA_API_SECRET_KEY", raising=False)
+
+    from glassbox.data.alpaca_client import supervisor_trading_client, trading_client
+
+    sup, trader = supervisor_trading_client(), trading_client()
+    assert sup is not trader, "supervisor must hold its own client instance"

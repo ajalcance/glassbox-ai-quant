@@ -4,6 +4,8 @@ a session between trader and supervisor."""
 
 from __future__ import annotations
 
+import os
+
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.historical.option import OptionHistoricalDataClient
@@ -21,9 +23,19 @@ def trading_client() -> TradingClient:
 
 
 def supervisor_trading_client() -> TradingClient:
+    """Client for the supervisor process.
+
+    An Alpaca paper account issues one active key pair at a time, so separate
+    credentials are only possible if the operator supplies them. What the
+    supervisor guarantee actually requires is a separate *process* with its own
+    client instance and connection pool, so a wedged trader can never block the
+    kill switch — that holds either way. Distinct credentials, when available,
+    are defence in depth on top of it.
+    """
     return TradingClient(
-        api_key=require_env("SUPERVISOR_ALPACA_API_KEY_ID"),
-        secret_key=require_env("SUPERVISOR_ALPACA_API_SECRET_KEY"),
+        api_key=os.environ.get("SUPERVISOR_ALPACA_API_KEY_ID") or require_env("ALPACA_API_KEY_ID"),
+        secret_key=os.environ.get("SUPERVISOR_ALPACA_API_SECRET_KEY")
+        or require_env("ALPACA_API_SECRET_KEY"),
         paper=True,
     )
 

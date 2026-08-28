@@ -11,7 +11,7 @@ Most retail systems have three of these. Professional grade is having all eleven
 | 5 | **Execution** | Deterministic `client_order_id` (idempotent retries), atomic `mleg` orders, limit-at-mid repricing ladder (never market), circuit breaker 5-fail/60s/half-open. |
 | 6 | **Trade management** | Triple barrier: 50% max-profit take (credit) / 2× stop / time exit; break-even at 60% of target; ATR trail on directional; never hold within 24h of expiry; flatten all Thu Sep 3 close. Alpaca has no bracket/OTO on mleg — this layer IS our bracket. |
 | 7 | **Portfolio risk** | Σ max-loss ≤ 6% equity; net delta-dollars ±$15k; vega/gamma caps; ≤2 positions/underlying; sector + correlation caps. |
-| 8 | **Account guards** | Separate supervisor process, own credentials/session: −2% daily halt, −6% max-DD halt (manual reset), loss-streak size halving, kill switch (file + CLI), 90s heartbeat flatten. |
+| 8 | **Account guards** | Separate supervisor process with its own client and connection pool: −2% daily halt, −6% max-DD halt (manual reset), loss-streak size halving, kill switch (file + CLI), 90s heartbeat flatten. |
 | 9 | **Reconciliation** | Local vs broker vs sum-of-fills every cycle. Mismatch → HALT until explained. State rebuilds from broker + audit log on boot. |
 | 10 | **Audit log** | Append-only hash-chained JSONL, one record per decision (inputs, LLM rationale + prompt hash, edge numbers, gate results, fills, exits, P&L). Doubles as ML training set and demo material. |
 | 11 | **Validation** | No backtester (deliberate — LLM look-ahead bias lives in weights). Instead: replay harness for warm-start only, hypothesis property tests on the gate, chaos tests on execution, automated look-ahead audit. |

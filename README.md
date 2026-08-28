@@ -29,7 +29,7 @@ Alpaca news stream (WebSocket)
                                   └─ hash-chained audit log ──→ retrains meta-labeler + bandit
 ```
 
-An independent **supervisor process** (own credentials, own Alpaca session) enforces daily loss limits, max drawdown, and the kill switch — a deadlocked trader cannot block the emergency path.
+An independent **supervisor process** (own process, own client and connection pool) enforces daily loss limits, max drawdown, and the kill switch — a deadlocked trader cannot block the emergency path.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full 11-layer design and [docs/PLAN.md](docs/PLAN.md) for the hackathon plan.
 
