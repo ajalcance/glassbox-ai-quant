@@ -44,7 +44,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from glassbox.audit import verify_day
+from glassbox.audit import day_files, verify_day
+from glassbox.clock import market_date
 from glassbox.config import load_config
 from glassbox.data.alpaca_client import trading_client
 from glassbox.reconcile import reconcile
@@ -54,6 +55,21 @@ from glassbox.store import Store
 # monitor silently watching the wrong account reports "all invariants hold"
 # about a system nobody is running.
 HEARTBEAT_STALE_S = 90.0  # matches the supervisor guard default
+# A defined-risk spread cannot realise much beyond its own max loss: a debit
+# spread's best case is roughly the width above the debit paid (~1x), and a
+# credit spread's is the credit itself. 1.5 leaves 50% headroom for slippage
+# and fees while still catching a sign inversion, which doubles the magnitude.
+# Calibrated against the real incident: $497 realised on a $247 max-loss
+# position is a ratio of 2.01, so a factor of 3.0 — the first value written
+# here — would have slept through the exact bug this exists to catch.
+PNL_PLAUSIBILITY_FACTOR = 1.5
+# Swallowed errors per day before it stops being noise. Every one of these is
+# caught by design so a single bad event cannot end a session, which is exactly
+# why they need counting.
+ERROR_BUDGET = 25
+# How long the pipeline may evaluate nothing, mid-session, before that is
+# treated as silence rather than a quiet tape.
+SILENCE_MINUTES = 45
 LEGAL_TRANSITIONS = {
     ("opening", "open"),
     ("opening", "closed"),
@@ -110,6 +126,17 @@ def snapshot_docker(workdir: Path) -> tuple[Path | None, Path | None]:
         capture_output=True, check=False,
     ).returncode == 0
     return (db_out if db_ok else None), (audit_out if audit_ok else None)
+
+
+def _minutes_ago(ts: str | None) -> float:
+    """Age of an ISO timestamp in minutes; unparseable reads as ancient, so a
+    malformed record can never make the pipeline look alive."""
+    if not ts:
+        return float("inf")
+    try:
+        return (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds() / 60
+    except ValueError:
+        return float("inf")
 
 
 def supervisor_log_age() -> float | None:
@@ -184,6 +211,7 @@ class Monitor:
         self.samples: deque = deque(maxlen=720)  # ~4h at 20s, for the sparkline
         self.prev_status: dict[str, str] = {}
         self.pending_unknown: set[str] = set()
+        self.pending_orphans: set[str] = set()
         self._fired: set[str] = set()
         self.findings: list[dict] = []
         self.snapshot_lock = threading.Lock()
@@ -233,6 +261,12 @@ class Monitor:
     def cycle(self, n: int) -> dict:
         checks: dict[str, dict] = {}
         metrics: dict = {}
+        # Market state is needed by several checks; read it once, and treat an
+        # unreadable clock as "closed" so a data outage cannot itself raise a
+        # false alarm about silence.
+        market_is_open = False
+        with contextlib.suppress(Exception):
+            market_is_open = bool(self.client.get_clock().is_open)
 
         def record(name, ok, detail, severity="FAIL"):
             checks[name] = {"ok": bool(ok), "detail": str(detail)[:400]}
@@ -261,6 +295,16 @@ class Monitor:
                 record("chains", True, "no audit dir yet")
         except Exception as e:  # noqa: BLE001
             record("chains", False, f"verify failed: {type(e).__name__}: {e}")
+
+        # Today's audit records, read once for the regression-watch checks
+        # below. Malformed lines are skipped: a monitor must never be the
+        # reason you cannot see the system.
+        recent_audit: list[dict] = []
+        with contextlib.suppress(Exception):
+            for path in day_files(audit_dir):
+                for line in path.read_text(errors="replace").splitlines():
+                    with contextlib.suppress(json.JSONDecodeError):
+                        recent_audit.append(json.loads(line))
 
         # --- broker reads (read-only API calls)
         account = positions = live_orders = None
@@ -333,6 +377,131 @@ class Monitor:
                     "detail": "all live orders known to the store" if not confirmed
                     else f"{len(confirmed)} unknown",
                 }
+
+            # --- REGRESSION WATCH -------------------------------------------
+            # One detector per bug actually shipped to this system. Each would
+            # have caught its bug in production before a human noticed, and
+            # each stays armed in case a later change reintroduces it.
+
+            # 1. Close-sign inversion. A realised P&L larger than the position
+            # could possibly lose means the fill was read in the wrong
+            # orientation — the bug that would have booked a -$3 trade as -$497.
+            if store:
+                implausible = []
+                for r in store.training_rows():
+                    pnl, cap = r["realized_pnl"], r["max_loss"]
+                    if pnl is None or cap is None or float(cap) <= 0:
+                        continue
+                    # A defined-risk spread cannot lose more than max_loss, and
+                    # cannot win more than roughly the width beyond it either.
+                    if abs(float(pnl)) > float(cap) * PNL_PLAUSIBILITY_FACTOR:
+                        implausible.append(
+                            f"{r['position_id']}: pnl=${float(pnl):,.0f} vs max_loss=${float(cap):,.0f}"
+                        )
+                record("pnl_plausible", not implausible,
+                       f"{len(store.training_rows())} closed position(s), all within max_loss"
+                       if not implausible
+                       else f"IMPLAUSIBLE realised P&L (close-sign regression?): {implausible}",
+                       severity="CRITICAL")
+
+            # 2. Orphaned exits. A position stuck in 'closing' or 'opening'
+            # with no in-flight order is unreachable: the manager only walks
+            # 'open', so no barrier and no deadline flatten will ever touch it.
+            if store:
+                in_flight_positions = {
+                    o["position_id"] for o in store.orders_in_flight() if o["position_id"]
+                }
+                orphans = [
+                    f"{r['position_id']} ({r['status']})"
+                    for r in store.open_positions()
+                    if r["status"] in ("opening", "closing")
+                    and r["position_id"] not in in_flight_positions
+                ]
+                # One cycle of lag is normal between submit and the store write;
+                # only a repeat sighting is a real orphan.
+                confirmed_orphans = set(orphans) & self.pending_orphans
+                self.pending_orphans = set(orphans)
+                record("no_orphans", not confirmed_orphans,
+                       "no positions stranded without an order"
+                       if not confirmed_orphans
+                       else f"ORPHANED (unreachable by the manager): {sorted(confirmed_orphans)}",
+                       severity="CRITICAL")
+
+            # 3. Daily baseline staleness. The -2% halt is only daily if its
+            # baseline rolls over; written once it silently becomes "loss
+            # since first boot" and day 2 inherits day 1's drawdown.
+            if store:
+                stamp = store.get_state("session_start_date")
+                today = market_date().isoformat()
+                fresh = stamp == today
+                record("daily_baseline", fresh or not market_is_open,
+                       f"session baseline dated {stamp} (today {today})"
+                       + ("" if market_is_open else " — market closed, rolls at next open"),
+                       severity="CRITICAL")
+
+            # 4. One signal, one position. The durable dedupe behind the
+            # in-memory seen-set: a restart replaying news must not open a
+            # second position on a story already traded.
+            if store:
+                from collections import Counter
+
+                sids = Counter(
+                    r["signal_id"] for r in store.open_positions() + store.training_rows()
+                    if r["signal_id"]
+                )
+                repeats = {s: n for s, n in sids.items() if n > 1}
+                record("signal_uniqueness", not repeats,
+                       f"{len(sids)} signal(s), one position each" if not repeats
+                       else f"DUPLICATE positions per signal: {repeats}", severity="CRITICAL")
+
+            # 5. Per-position risk cap. Sizing haircuts were a silent no-op
+            # whenever the volatility budget bound; a position above the cap
+            # means a haircut failed to apply somewhere.
+            if store and account is not None:
+                cap = float(account.equity) * self.cfg.risk.max_loss_per_position_pct / 100
+                oversized = [
+                    f"{r['position_id']}: ${float(r['max_loss']):,.0f}"
+                    for r in store.open_positions()
+                    if r["max_loss"] and float(r["max_loss"]) > cap + 0.01
+                ]
+                record("position_cap", not oversized,
+                       f"all positions within ${cap:,.0f} per-position cap" if not oversized
+                       else f"OVERSIZED positions: {oversized}", severity="CRITICAL")
+
+            # 6. A flatten that could not finish. The supervisor writes this
+            # when legs remain after every retry — the guards decided
+            # everything must go and something is still on the book.
+            incomplete = [r for r in recent_audit if r.get("kind") == "flatten_incomplete"]
+            record("flatten_complete", not incomplete,
+                   "no incomplete flatten today" if not incomplete
+                   else f"FLATTEN LEFT POSITIONS ON THE BOOK: {incomplete[-1].get('remaining')}",
+                   severity="CRITICAL")
+
+            # 7. Error-rate watch. These are all swallowed by design so one bad
+            # event cannot end a session — which also means they are invisible
+            # unless something counts them.
+            err_kinds = ("pipeline_error", "lifecycle_error", "reconcile_error", "order_error",
+                         "stream_error", "news_poll_error", "floor_error", "llm_error")
+            errs = Counter(r["kind"] for r in recent_audit if r.get("kind") in err_kinds)
+            record("error_rate", sum(errs.values()) <= ERROR_BUDGET,
+                   f"{sum(errs.values())} swallowed error(s) today"
+                   + (f": {dict(errs)}" if errs else ""),
+                   severity="WARN")
+
+            # 8. Silence detection. A system that stops seeing news looks
+            # exactly like a quiet market, and the contest is scored on a
+            # window too short to lose half of.
+            if market_is_open:
+                seen = sum(
+                    1 for r in recent_audit
+                    if r.get("kind") in ("analyst_view", "signal_dropped")
+                    and _minutes_ago(r.get("ts")) <= SILENCE_MINUTES
+                )
+                record("pipeline_alive", seen > 0,
+                       f"{seen} signal(s) evaluated in the last {SILENCE_MINUTES}min"
+                       if seen else
+                       f"NO news evaluated in {SILENCE_MINUTES}min while the market is open",
+                       severity="CRITICAL")
 
             # --- status transitions
             if store:

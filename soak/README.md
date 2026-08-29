@@ -83,6 +83,32 @@ uv run python soak/monitor_passive.py --account YOUR_PAPER_ACCOUNT
 uv run python soak/monitor_passive.py --account YOUR_PAPER_ACCOUNT --source docker
 ```
 
+**Regression watch.** Eight of its checks exist because the corresponding bug
+was actually shipped to this system. Each one would have caught its bug in
+production before a human noticed:
+
+| Check | The bug it watches for |
+|---|---|
+| `pnl_plausible` | A close fill read in the wrong sign orientation — the real incident booked a $3 loss as $497 |
+| `no_orphans` | A position stranded in `closing`/`opening` with no order, unreachable by the manager and the deadline flatten |
+| `daily_baseline` | A session baseline that never rolls over, quietly turning the daily loss halt into "loss since first boot" |
+| `signal_uniqueness` | A restart replaying news and opening a second position on a story already traded |
+| `position_cap` | A sizing haircut that failed to apply |
+| `flatten_complete` | Legs left on the book after the guards decided everything must go |
+| `error_rate` | Swallowed errors accumulating invisibly — every one is caught by design so a bad event cannot end a session |
+| `pipeline_alive` | A dead news feed, which from the outside looks exactly like a quiet market |
+
+`verify_detectors.py` proves each of these fires, by building a synthetic store
+containing exactly one bug and asserting the predicate reports it — plus
+false-positive probes that must stay quiet. A check that never fires is
+worthless, and this is not hypothetical: the first version of
+`pnl_plausible` used a threshold loose enough to sleep through the very
+incident it was written for, and this file is what caught that.
+
+```bash
+uv run python soak/verify_detectors.py
+```
+
 Each cycle it verifies: every per-role audit chain; that local open positions
 agree with the broker; that stored heat equals the sum of open `max_loss` and
 sits under the cap; that no live `client_order_id` is duplicated and no unknown
