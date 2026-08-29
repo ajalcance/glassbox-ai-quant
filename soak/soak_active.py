@@ -648,13 +648,51 @@ SCENARIOS = {
 }
 
 
+def _in_container(pid: str) -> bool:
+    """Whether a PID belongs to a container rather than this host tree.
+
+    Container processes are visible to the host's pgrep, but a containerised
+    trader reads its own mounted volume — it cannot see this run's kill file
+    or database, so it is not something we are about to flip a switch under.
+    Only meaningful on Linux; on macOS the engine runs in a VM and its
+    processes never appear here at all, so the answer is correctly False.
+    """
+    try:
+        return "docker" in Path(f"/proc/{pid}/cgroup").read_text()
+    except OSError:
+        return False
+
+
 def _glassbox_processes() -> list[str]:
+    """Live glassbox processes that share THIS directory's state.
+
+    The precondition it serves is "do not flip the real kill switch under a
+    running trader". A trader in a container, or one started from a different
+    checkout, reads a different data/ — so neither is a reason to refuse, and
+    treating them as one makes the soak unrunnable alongside a live stack.
+    """
     out = subprocess.run(
         ["pgrep", "-fl", "glassbox.runner|glassbox.supervisor|glassbox.scheduler"],
         capture_output=True, text=True, check=False,
     ).stdout.strip()
     mine = str(os.getpid())
-    return [l for l in out.splitlines() if l and not l.startswith(mine)]
+    here = ROOT.resolve()
+    live = []
+    for line in out.splitlines():
+        if not line or line.startswith(mine):
+            continue
+        pid = line.split(None, 1)[0]
+        if _in_container(pid):
+            continue
+        # A host process counts only if its working directory is ours, since
+        # that is what decides whether it reads our data/ and our KILL file.
+        try:
+            if Path(f"/proc/{pid}/cwd").resolve() != here:
+                continue
+        except OSError:
+            pass  # cwd unreadable (macOS, or a foreign owner): assume it counts
+        live.append(line)
+    return live
 
 
 def main() -> int:
