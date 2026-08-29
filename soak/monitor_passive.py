@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 import urllib.request
-from collections import deque
+from collections import Counter, deque
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -358,8 +358,6 @@ class Monitor:
 
             # --- duplicate / unknown live client_order_ids
             if store and live_orders is not None:
-                from collections import Counter
-
                 coids = Counter(o.client_order_id for o in live_orders if o.client_order_id)
                 dups = {c: k for c, k in coids.items() if k > 1}
                 record("dup_coids", not dups,
@@ -443,8 +441,6 @@ class Monitor:
             # in-memory seen-set: a restart replaying news must not open a
             # second position on a story already traded.
             if store:
-                from collections import Counter
-
                 sids = Counter(
                     r["signal_id"] for r in store.open_positions() + store.training_rows()
                     if r["signal_id"]
