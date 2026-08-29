@@ -40,6 +40,24 @@ class Activity:
         return f"{self.symbol} {label} ({self.qty})".strip()
 
 
+def _timeout() -> httpx.Timeout:
+    """Fully bounded timeout from config, matching every other broker call.
+
+    All four phases are set explicitly: a 2-tuple leaves write and pool as
+    None, and "unbounded" is the exact property the broker-timeout rule exists
+    to eliminate — a half-open socket must never block a caller forever.
+    """
+    from glassbox.config import load_config
+
+    cfg = load_config().execution
+    return httpx.Timeout(
+        connect=cfg.broker_connect_timeout_seconds,
+        read=cfg.broker_read_timeout_seconds,
+        write=cfg.broker_connect_timeout_seconds,
+        pool=cfg.broker_connect_timeout_seconds,
+    )
+
+
 def fetch(api_key: str, secret_key: str, activity_type: str, on: date | None = None) -> list:
     """One activity type for one day. Raises on transport failure; the caller
     decides whether an unavailable check is safe."""
@@ -48,7 +66,9 @@ def fetch(api_key: str, secret_key: str, activity_type: str, on: date | None = N
         f"{PAPER_BASE}/v2/account/activities/{activity_type}",
         headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key},
         params=params,
-        timeout=15,
+        # Same bounded-call rule as every Alpaca SDK client: this is the one
+        # broker request that does not route through _with_default_timeout.
+        timeout=_timeout(),
     )
     response.raise_for_status()
     payload = response.json()

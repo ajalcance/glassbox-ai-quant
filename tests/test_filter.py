@@ -48,6 +48,42 @@ def test_rejects_stale_news():
     assert not r.passed and "stale" in r.reason
 
 
+def test_filter_thresholds_come_from_config_not_literals():
+    """These three bounds were hardcoded in Python while config/default.yaml
+    documented them in prose — the drift-prone arrangement invariant 6 exists
+    to prevent. Retuning the YAML must change behaviour, or the constant has
+    quietly moved back into the code."""
+    stale = item("Apple announces a major acquisition of a rival", minutes_ago=200)
+    assert not make_filter().evaluate(stale, now=NOW).passed
+
+    lenient = CFG.model_copy(update={"max_news_age_hours": 6})
+    assert NewsFilter(UNIVERSE, lenient).evaluate(stale, now=NOW).passed, (
+        "raising max_news_age_hours must admit an older story"
+    )
+
+    tiny = item("Apple up")
+    assert not make_filter().evaluate(tiny, now=NOW).passed
+    permissive = CFG.model_copy(update={"min_headline_chars": 5})
+    assert NewsFilter(UNIVERSE, permissive).evaluate(tiny, now=NOW).passed
+
+    # Novelty: a partly-overlapping follow-up clears the default bar, but an
+    # aggressive threshold (drop anything under 95% novel) rejects it. Lower
+    # threshold = wider dedup net, since the test is novelty < (1 - threshold).
+    first = "Apple beats on earnings and raises full year guidance"
+    followup = item("Apple names a new chief financial officer today", id_="n2")
+
+    f = make_filter()
+    assert f.evaluate(item(first), now=NOW).passed
+    assert f.evaluate(followup, now=NOW).passed, "a distinct story is not a restatement"
+
+    aggressive = CFG.model_copy(update={"novelty_similarity_threshold": 0.05})
+    f2 = NewsFilter(UNIVERSE, aggressive)
+    assert f2.evaluate(item(first), now=NOW).passed
+    assert not f2.evaluate(followup, now=NOW).passed, (
+        "a wider dedup net must reject a partially overlapping follow-up"
+    )
+
+
 def test_rejects_restatement_of_recent_story():
     """The 40th retelling of the same story is not a new signal."""
     f = make_filter()

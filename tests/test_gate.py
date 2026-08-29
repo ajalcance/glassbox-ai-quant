@@ -114,6 +114,29 @@ def test_correlated_names_count_as_concentration(bull_put):
     assert not d.approved and "correlation" in veto_names(d)
 
 
+def test_concentration_limits_come_from_config_not_literals(bull_put):
+    """The position count, the correlated-position count and the correlation
+    threshold itself were hardcoded in the gate — real risk limits with no
+    config key, against invariant 6. Retuning the YAML must move the veto."""
+    two_in_spy = PortfolioState(500.0, Greeks(), {"SPY": 2}, 2)
+    assert not evaluate(ctx(structure=bull_put, portfolio=two_in_spy), CFG).approved
+
+    roomier = CFG.model_copy(deep=True)
+    roomier.gate.max_positions_per_underlying = 3
+    d = evaluate(ctx(structure=bull_put, portfolio=two_in_spy), roomier)
+    assert "concentration" not in veto_names(d), "raising the count must admit a third"
+
+    # Correlation threshold: 0.80 pairs count as correlated at 0.7, not at 0.9.
+    pair = PortfolioState(500.0, Greeks(), {"QQQ": 1, "IWM": 1}, 2)
+    corr = {("QQQ", "SPY"): 0.80, ("IWM", "SPY"): 0.80}
+    assert "correlation" in veto_names(evaluate(ctx(structure=bull_put, portfolio=pair,
+                                                    correlations=corr), CFG))
+    loose = CFG.model_copy(deep=True)
+    loose.gate.correlation_threshold = 0.9
+    d2 = evaluate(ctx(structure=bull_put, portfolio=pair, correlations=corr), loose)
+    assert "correlation" not in veto_names(d2), "a higher bar must stop counting 0.80 as correlated"
+
+
 def test_uncorrelated_names_do_not_block(bull_put):
     p = PortfolioState(500.0, Greeks(), {"TLT": 1, "GLD": 1}, 2)
     corr = {("SPY", "TLT"): -0.2, ("GLD", "SPY"): 0.1}

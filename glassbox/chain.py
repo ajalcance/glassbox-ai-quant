@@ -77,7 +77,7 @@ def atm_straddle_mid(chain: list[ContractQuote], spot: float) -> float:
     return nearest(calls, spot).mid + nearest(puts, spot).mid
 
 
-def _wing_width(contracts: list[ContractQuote], spot: float, target_pct: float = 1.0) -> float:
+def _wing_width(contracts: list[ContractQuote], spot: float, target_pct: float) -> float:
     """Spread width in points, from the chain's own strike spacing.
 
     Using the real increment avoids requesting strikes that do not exist.
@@ -101,16 +101,27 @@ def build_structure(
     spot: float,
     expected_move_pct: float,
     underlying: str,
+    cfg=None,
 ) -> tuple[Structure, float]:
     """Return the structure and its net price (+ debit paid, - credit received).
 
     Raises NoSuitableStrikesError when the chain cannot express the view. A
     signal we cannot express cleanly is skipped, never approximated.
+
+    `cfg` supplies the geometry (wing width, minimum move); it defaults to the
+    loaded config so drills and tests can call this without threading it.
     """
     if spot <= 0:
         raise NoSuitableStrikesError(f"invalid spot {spot}")
+    if cfg is None:
+        from glassbox.config import load_config
+
+        cfg = load_config()
+    wing_pct = cfg.signal.wing_width_pct
     calls, puts = _side(chain, Right.CALL), _side(chain, Right.PUT)
-    move = spot * max(expected_move_pct, 0.5) / 100  # floor: never pick the ATM strike twice
+    # Floor the move so a near-zero forecast cannot pick the same strike twice,
+    # which is not a spread.
+    move = spot * max(expected_move_pct, cfg.signal.min_move_pct_for_strikes) / 100
 
     def build(legs: tuple[Leg, ...], net: float) -> tuple[Structure, float]:
         structure = Structure(kind=kind, underlying=underlying, legs=legs)
@@ -119,7 +130,7 @@ def build_structure(
 
     if kind is StructureKind.BULL_PUT_SPREAD:
         short = nearest(puts, spot - move)
-        width = _wing_width(puts, spot)
+        width = _wing_width(puts, spot, wing_pct)
         long_ = nearest([p for p in puts if p.strike < short.strike], short.strike - width)
         if long_.strike >= short.strike:
             raise NoSuitableStrikesError("no put strike below the short leg")
@@ -130,7 +141,7 @@ def build_structure(
 
     if kind is StructureKind.BEAR_CALL_SPREAD:
         short = nearest(calls, spot + move)
-        width = _wing_width(calls, spot)
+        width = _wing_width(calls, spot, wing_pct)
         long_ = nearest([c for c in calls if c.strike > short.strike], short.strike + width)
         if long_.strike <= short.strike:
             raise NoSuitableStrikesError("no call strike above the short leg")
@@ -141,7 +152,7 @@ def build_structure(
 
     if kind is StructureKind.IRON_CONDOR:
         put_s, call_s = nearest(puts, spot - move), nearest(calls, spot + move)
-        pw, cw = _wing_width(puts, spot), _wing_width(calls, spot)
+        pw, cw = _wing_width(puts, spot, wing_pct), _wing_width(calls, spot, wing_pct)
         put_l = nearest([p for p in puts if p.strike < put_s.strike], put_s.strike - pw)
         call_l = nearest([c for c in calls if c.strike > call_s.strike], call_s.strike + cw)
         if put_l.strike >= put_s.strike or call_l.strike <= call_s.strike:

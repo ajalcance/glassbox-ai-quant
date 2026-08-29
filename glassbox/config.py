@@ -37,6 +37,7 @@ class RiskCfg(BaseModel):
 class SizingCfg(BaseModel):
     meta_multiplier_floor: float
     meta_multiplier_ceiling: float
+    meta_multiplier_ceiling_p: float
     target_daily_vol: float
     heat_taper_start: float
     heat_taper_floor: float
@@ -62,6 +63,9 @@ class GateCfg(BaseModel):
     min_session_fraction: float
     max_spread_pct_of_mid: float
     min_open_interest: int
+    max_positions_per_underlying: int
+    max_correlated_positions: int
+    correlation_threshold: float
 
 
 class ManageCfg(BaseModel):
@@ -82,6 +86,9 @@ class ManageCfg(BaseModel):
 class SignalCfg(BaseModel):
     novelty_window_hours: int
     min_confidence: float
+    novelty_similarity_threshold: float
+    min_headline_chars: int
+    max_news_age_hours: float
     edge_ratio_debit: float
     edge_ratio_credit: float
     max_plausible_ratio: float
@@ -89,6 +96,8 @@ class SignalCfg(BaseModel):
     min_minutes_for_reaction: int
     vrp_max_for_debit: float
     vrp_min_for_credit: float
+    wing_width_pct: float
+    min_move_pct_for_strikes: float
 
 
 class RegimeCfg(BaseModel):

@@ -63,7 +63,7 @@ def correlated_exposure(
     positions_by_underlying: dict[str, int],
     candidate: str,
     correlations: dict[tuple[str, str], float],
-    threshold: float = 0.7,
+    threshold: float,
 ) -> int:
     """How many existing positions sit in names highly correlated to `candidate`.
 

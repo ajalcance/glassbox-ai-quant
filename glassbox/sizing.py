@@ -86,7 +86,7 @@ def meta_multiplier(p: float, cfg) -> float:
     floor_p = cfg.risk.min_meta_label_p
     if p < floor_p:
         return 0.0
-    ceiling_p = 0.85
+    ceiling_p = cfg.sizing.meta_multiplier_ceiling_p
     if p >= ceiling_p:
         return cfg.sizing.meta_multiplier_ceiling
     span = ceiling_p - floor_p

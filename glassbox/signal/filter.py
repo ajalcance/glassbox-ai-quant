@@ -108,10 +108,14 @@ class FilterResult:
 class NewsFilter:
     """Stateful only in that it remembers recent headlines per symbol."""
 
-    def __init__(self, universe: set[str], cfg, similarity_threshold: float = 0.6):
+    def __init__(self, universe: set[str], cfg, similarity_threshold: float | None = None):
         self.universe = universe
+        self.cfg = cfg
         self.window = timedelta(hours=cfg.novelty_window_hours)
-        self.threshold = similarity_threshold
+        self.threshold = (
+            cfg.novelty_similarity_threshold if similarity_threshold is None
+            else similarity_threshold
+        )
         self._seen: dict[str, list[tuple[datetime, frozenset[str]]]] = {}
 
     def _prune(self, symbol: str, now: datetime) -> list[tuple[datetime, frozenset[str]]]:
@@ -143,11 +147,11 @@ class NewsFilter:
             if phrase in headline_lower:
                 return FilterResult(False, f"boilerplate headline ({phrase!r})")
 
-        if len(item.headline) < 15:
+        if len(item.headline) < self.cfg.min_headline_chars:
             return FilterResult(False, "headline too short to carry information")
 
         age = now - item.created_at
-        if age > timedelta(hours=2):
+        if age > timedelta(hours=self.cfg.max_news_age_hours):
             return FilterResult(False, f"stale by {age.total_seconds() / 3600:.1f}h")
 
         score = self.novelty(item)

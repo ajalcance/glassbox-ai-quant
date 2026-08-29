@@ -221,7 +221,7 @@ def _check_concentration(ctx, cfg) -> CheckResult:
         return CheckResult("concentration", True, "no open positions")
     underlying = ctx.structure.underlying
     existing = ctx.portfolio.positions_by_underlying.get(underlying, 0)
-    if existing >= 2:
+    if existing >= cfg.gate.max_positions_per_underlying:
         return CheckResult("concentration", False, f"{existing} positions already in {underlying}")
     per_name_cap = ctx.equity * (cfg.risk.max_loss_per_underlying_pct / 100)
     if ctx.total_max_loss > per_name_cap:
@@ -237,9 +237,12 @@ def _check_correlation(ctx, cfg) -> CheckResult:
     if not ctx.portfolio or not ctx.correlations:
         return CheckResult("correlation", True, "no correlation data")
     n = correlated_exposure(
-        ctx.portfolio.positions_by_underlying, ctx.structure.underlying, ctx.correlations
+        ctx.portfolio.positions_by_underlying,
+        ctx.structure.underlying,
+        ctx.correlations,
+        threshold=cfg.gate.correlation_threshold,
     )
-    if n >= 2:
+    if n >= cfg.gate.max_correlated_positions:
         return CheckResult(
             "correlation", False, f"{n} positions in names correlated to {ctx.structure.underlying}"
         )
