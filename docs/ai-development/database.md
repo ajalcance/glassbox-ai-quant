@@ -20,7 +20,7 @@ One file per UTC day **per writing process** (`trader`, `supervisor`, `scheduler
 
 Record shape: `record_id, ts, prev_hash, kind` + kind-specific payload:
 - `signal` — news event, extracted features, LLM model + prompt hash, rationale, edge test numbers
-- `gate` — all 13 check results (including passes), verdict
+- `gate` — all 18 check results (including passes), verdict
 - `order` / `fill` / `exit` — execution lifecycle with IDs
 - `halt` / `resume` — guard events with reason
 - `report` — nightly summary pointer
