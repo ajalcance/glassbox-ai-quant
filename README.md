@@ -191,26 +191,40 @@ before the close on Thursday 3 September, ahead of the EOD equity snapshot —
 `manage.flatten_all_at` in `config/default.yaml` is set to that deadline, which
 also avoids any exercise or assignment on 3 September expiries.
 
-**Risk sizing, decided before the window and frozen.** Base risk per trade is
-1.0% of equity, raised from 0.5% after the first live session. The reason is
-mechanical rather than optimistic: the meta-labeler abstains until it has 30
-labelled outcomes, which four trading days cannot produce, so its confidence
-multiplier was holding every position at roughly 0.2–0.35% of equity
-indefinitely — the audit log shows the sizer computing budgets of $209–$342
-against a nominal $500. Raising R restores approximately the risk the system
-was designed to take once that multiplier is applied.
+**Risk sizing: raised before the window, reverted on day one.** Base risk per
+trade is **0.5% of equity**. It was raised to 1.0% on 30 August, then reverted
+on 31 August — the first day of the measurement window. Both the change and the
+reversal are recorded here rather than quietly settled, because a number that
+moved during the contest deserves its reasoning in public.
 
-Every hard limit is deliberately unchanged: 1.5% max loss per position, 3% per
+The raise was mechanical: the meta-labeler abstains until it has 30 labelled
+outcomes, which four trading days cannot produce, so its confidence multiplier
+was holding every position at roughly 0.2–0.35% of equity — the audit log shows
+budgets of $209–$342 against a nominal $500. Raising R restored approximately
+the risk the system was designed to take once that multiplier applies.
+
+It also rested on a claim that proved false: *"the delta band caps SPY at a
+single spread whatever R says."* That assumed the band would limit position
+size. It does not — **the gate is a binary veto, not a size reducer.** At
+R=1.0% the sizer asked for 2 SPY spreads carrying −$48,119 of delta against the
+±$40,000 band, and the trade was refused outright rather than trimmed to the 1
+spread that fits at roughly −$24,000. The 31 August audit log holds both cases:
+two qty=1 candidates that cleared the band, and two qty=2 candidates that did
+not.
+
+R=1.0% and a $40,000 delta band are jointly inconsistent on the highest-notional
+underlying, so one had to give. **Reverting R is the risk-reducing resolution**
+and restores the value every pre-contest test ran under. Raising the band was
+the alternative and was explicitly rejected: loosening a directional-exposure
+limit in order to obtain trades is optimisation on contest data, which this
+project forbids itself. The proper fix — sizing choosing the largest qty that
+fits the delta band, as it already tapers for heat and drawdown — is new code
+in the sizing path and is deferred until after the window closes.
+
+Every hard limit is unchanged throughout: 1.5% max loss per position, 3% per
 underlying, 6% portfolio heat, ±$40k net delta, −2% daily loss halt, −6% max
-drawdown halt, and defined risk on every leg. Those are the safety envelope;
-R is a sizing preference. The increase is also self-limiting, because the
-binding constraint on the highest-notional names is no longer R but the delta
-band — one ATM SPY vertical is $25–35k of a $40k budget, so SPY stays capped at
-a single spread whatever R says.
-
-This was decided **before** the measurement window opened and is frozen for its
-duration. Re-tuning R mid-contest in response to results would be parameter
-optimisation on contest data, which this project forbids itself.
+drawdown halt, and defined risk on every leg. No risk limit has been widened at
+any point.
 
 **Market data.** Runs on Alpaca's free Basic plan, which provides the
 *indicative* options feed rather than OPRA. Pricing uses latest quotes and

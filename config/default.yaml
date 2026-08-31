@@ -6,24 +6,29 @@ account:
   paper: true
 
 risk:
-  # Base risk R as % of equity. Set to 1.0 for the contest horizon after the
-  # first live session showed the sizer computing budgets of $209-$342 against
-  # a nominal $500: the meta-labeler abstains until 30 labelled outcomes exist,
-  # which four trading days cannot produce, so its confidence multiplier holds
-  # every position at roughly 0.2-0.35% indefinitely. 1.0 restores approximately
-  # the risk the system was designed to take once that multiplier is applied.
+  # Base risk R as % of equity.
   #
-  # Safe because the binding constraint on the highest-notional names is no
-  # longer R but delta_dollars_band: one ATM SPY vertical is $25-35k of the
-  # $40k band, so SPY stays capped at a single spread whatever R says, and the
-  # increase reaches only lower-priced underlyings. loss_streak_half_size then
-  # halves R after four consecutive losses, well before the -2% daily halt.
+  # Raised to 1.0 on Sat 30 Aug; reverted to 0.5 on Mon 31 Aug, day one of the
+  # measurement window, because the raise rested on a claim that turned out to
+  # be false. That claim was "the delta band caps SPY at a single spread
+  # whatever R says" — assuming the band would self-limit size. It does not:
+  # the gate is a binary veto, not a size reducer. At R=1.0 the sizer asked for
+  # 2 SPY spreads carrying -$48,119 of delta against the +/-$40,000 band, and
+  # the trade was refused outright rather than trimmed to the 1 spread that
+  # fits at roughly -$24,000. The 31 Aug audit log holds both cases: two qty=1
+  # candidates that cleared the band, and two qty=2 candidates that did not.
   #
-  # Every hard limit below is deliberately unchanged. This is a sizing
-  # preference; those are the safety envelope. Decided before the measurement
-  # window opened and frozen for its duration — re-tuning R mid-contest would
-  # be parameter optimisation on contest data.
-  r_per_trade_pct: 1.0
+  # R=1.0 and delta_dollars_band=40000 are jointly inconsistent on the
+  # highest-notional underlying, so one had to give. Reverting R is the
+  # risk-REDUCING resolution and restores the value every pre-contest test ran
+  # under. Raising the band was the alternative and is explicitly rejected:
+  # loosening a directional-exposure limit in order to obtain trades is
+  # optimisation on contest data, which this project forbids itself.
+  #
+  # The proper fix is for sizing to choose the largest qty that fits the delta
+  # band, exactly as it already tapers for heat and drawdown. Deferred until
+  # after 3 Sep because it is new code in the sizing path.
+  r_per_trade_pct: 0.5
   max_loss_per_position_pct: 1.5
   max_loss_per_underlying_pct: 3.0
   portfolio_heat_pct: 6.0        # sum of max-loss across open positions
