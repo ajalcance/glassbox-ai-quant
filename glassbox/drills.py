@@ -54,6 +54,45 @@ class DrillFailed(Exception):
     """A drill assertion did not hold. Printed loudly; nothing is retried."""
 
 
+class _LifecycleShim:
+    """The minimum surface `lifecycle.sync` needs, so a drill can realise a
+    close through the production path instead of computing its own P&L.
+
+    Drills used to write the unrealised mark taken *before* the close and label
+    from that, which meant they never executed `lifecycle._on_fill` — the exact
+    function where the close-fill sign convention lives. The one test everyone
+    trusted was bypassing the code under test.
+    """
+
+    def __init__(self, store, audit, router, cfg):
+        self.store = store
+        self.audit = audit
+        self.router = router
+        self.cfg = cfg
+
+    def _structure_from_row(self, row):
+        from glassbox.structures import Leg, LegSide, Right, Structure, StructureKind
+
+        legs = tuple(
+            Leg(
+                l["symbol"],
+                Right(l["right"]),
+                float(l["strike"]),
+                __import__("datetime").date.fromisoformat(l["expiry"]),
+                LegSide(l["side"]),
+                l.get("ratio_qty", 1),
+            )
+            for l in __import__("json").loads(row["legs_json"])
+        )
+        return Structure(StructureKind(row["kind"]), row["underlying"], legs)
+
+    def feed_learners(self, row, label: int) -> None:
+        """Same reward the live trader gives, from the same realised label."""
+        ThompsonBandit(self.store).update(
+            StructureKind(row["kind"]), VolRegime.NORMAL, won=bool(label)
+        )
+
+
 def _ctx():
     cfg = load_config()
     store = Store(cfg.paths.db)
@@ -157,7 +196,13 @@ def drill_round_trip() -> int:
         if status != "filled":
             raise DrillFailed(f"open order did not fill: {status}")
         print(f"    FILLED at {order.filled_avg_price}")
-        store.upsert_position(position_id, status="open")
+        # Record what we actually paid, not what we asked to pay. Storing the
+        # limit here made every drill's P&L fiction: on 31 Aug the limit was
+        # 4.51 and the fill 3.29, and the recorded entry was the 4.51.
+        store.update_order(coid, status="filled", filled_price=float(order.filled_avg_price))
+        store.upsert_position(
+            position_id, status="open", entry_price=float(order.filled_avg_price)
+        )
 
         _step(4, "Verifying the broker agrees we hold it")
         broker = client.get_all_positions()
@@ -214,16 +259,40 @@ def drill_round_trip() -> int:
             raise DrillFailed(f"close order did not fill: {status}")
         print(f"    CLOSED at {order.filled_avg_price}")
 
-        _step(8, "Recording the outcome and feeding the learners")
-        store.close_position(
-            position_id,
-            str(forced.barrier),
-            forced.label or 0,
-            forced.unrealized_pnl,
-            now_utc().isoformat(),
-        )
-        bandit = ThompsonBandit(store)
-        bandit.update(structure.kind, VolRegime.NORMAL, won=bool(forced.label))
+        _step(8, "Realising through the production lifecycle")
+        # Realise the close the way the live trader does, rather than writing a
+        # P&L the drill computed itself. The old path stored the *unrealised*
+        # mark from step 6 and labelled from that, so on 31 Aug it recorded a
+        # +$5 win on a round trip that actually lost $8 — and fed that wrong
+        # label to the bandit. It also meant this drill never executed
+        # lifecycle._on_fill, which is exactly where the close-sign bug lived:
+        # the one test everyone trusted was bypassing the code under test.
+        from glassbox.execution import lifecycle
+
+        # The router already recorded the close order as 'submitted', so it is
+        # in orders_in_flight and sync() will poll it, see the fill, and
+        # realise it through the same code the live trader uses.
+        store.set_state(f"close_barrier:{position_id}", str(forced.barrier))
+        for event in lifecycle.sync(_LifecycleShim(store, audit, router, cfg), now_utc()):
+            print(f"    {event}")
+
+        row = store.get_position(position_id)
+        if row["status"] != "closed":
+            raise DrillFailed(f"lifecycle did not close the position: {row['status']}")
+        realized = float(row["realized_pnl"] or 0.0)
+        entry = float(row["entry_price"] or 0.0)
+        fill = float(order.filled_avg_price)
+        print(f"    entry {entry:+.2f}  close fill {fill:+.2f}  realised ${realized:+,.2f}")
+        # A defined-risk spread cannot realise much beyond its own max loss.
+        # This is the assertion that would have caught the sign inversion.
+        if abs(realized) > risk * DRILL_QTY * 1.5:
+            raise DrillFailed(
+                f"implausible realised P&L ${realized:,.2f} against max loss "
+                f"${risk * DRILL_QTY:,.2f} — check the close-fill sign convention"
+            )
+        # The bandit was already fed by the lifecycle's feed_learners, from the
+        # label it derived from the realised fill — the same path live trading
+        # takes. Feeding it again here would double-count the pull.
 
         rows = store.training_rows()
         if not any(r["position_id"] == position_id for r in rows):
@@ -399,6 +468,28 @@ class SimulatedBroker:
     def __init__(self):
         self.legs: dict[str, int] = {}
         self.orders: list = []
+        self.by_coid: dict[str, object] = {}
+
+    def get_order_by_client_id(self, client_order_id: str):
+        """Required by OrderRouter.poll, and therefore by lifecycle.sync.
+
+        Without it the drill could not realise a close through the production
+        path: poll would raise, the lifecycle would log a poll error and move
+        on, and the position would sit open while the drill reported success.
+        """
+        order = self.by_coid.get(client_order_id)
+        if order is not None:
+            return order
+        # An order this broker never issued is dead, not an error. Raising
+        # here tripped the circuit breaker on the store's leftover in-flight
+        # rows from earlier drills, and once open it blocked polling of the
+        # drill's *own* close — the position stayed open and the drill failed
+        # for a reason that had nothing to do with what it was testing.
+        return type(
+            "SimUnknownOrder",
+            (),
+            {"id": "sim-unknown", "status": "canceled", "filled_avg_price": None},
+        )()
 
     def submit_order(self, request):
         self.orders.append(request)
@@ -408,7 +499,7 @@ class SimulatedBroker:
                 signed = -signed
             self.legs[leg.symbol] = self.legs.get(leg.symbol, 0) + signed
         self.legs = {k: v for k, v in self.legs.items() if v != 0}
-        return type(
+        order = type(
             "SimOrder",
             (),
             {
@@ -417,6 +508,8 @@ class SimulatedBroker:
                 "filled_avg_price": request.limit_price,
             },
         )()
+        self.by_coid[request.client_order_id] = order
+        return order
 
     def get_all_positions(self):
         return [
@@ -508,20 +601,31 @@ def drill_simulate() -> int:
         if not forced.should_close or forced.label is None:
             raise DrillFailed("deadline did not force a labelled close")
         close_coid = close_order_id(position_id, str(forced.barrier))
+        # Same convention the live trader uses: the close limit is the negation
+        # of the position's current value, because Alpaca's MLEG limit is
+        # order-oriented while our prices are entry-oriented.
         router.submit_structure(
-            structure, DRILL_QTY, current, close_coid, position_id, closing=True
+            structure, DRILL_QTY, round(-current, 2), close_coid, position_id, closing=True
         )
-        store.close_position(
-            position_id,
-            str(forced.barrier),
-            forced.label,
-            forced.unrealized_pnl,
-            now_utc().isoformat(),
-        )
-        print(
-            f"    closed on {forced.barrier}, label={forced.label}, "
-            f"P&L ${forced.unrealized_pnl:+,.2f}"
-        )
+        # Realise through the production lifecycle rather than writing the
+        # unrealised mark taken moments ago. Same flaw as round_trip had: the
+        # drill recorded a P&L it computed itself and never executed
+        # lifecycle._on_fill, so neither drill exercised the realisation code.
+        from glassbox.execution import lifecycle
+
+        store.set_state(f"close_barrier:{position_id}", str(forced.barrier))
+        for event in lifecycle.sync(_LifecycleShim(store, audit, router, cfg), now_utc()):
+            print(f"    {event}")
+        row = store.get_position(position_id)
+        if row["status"] != "closed":
+            raise DrillFailed(f"lifecycle did not close the position: {row['status']}")
+        realized = float(row["realized_pnl"] or 0.0)
+        print(f"    closed on {forced.barrier}, label={row['meta_label']}, P&L ${realized:+,.2f}")
+        if abs(realized) > risk * DRILL_QTY * 1.5:
+            raise DrillFailed(
+                f"implausible realised P&L ${realized:,.2f} against max loss "
+                f"${risk * DRILL_QTY:,.2f} — check the close-fill sign convention"
+            )
 
         _step(7, "Broker should be flat and heat released")
         if broker.legs:
@@ -533,8 +637,9 @@ def drill_simulate() -> int:
         print("    flat, heat released, reconciliation clean")
 
         _step(8, "Feeding the learners")
-        bandit = ThompsonBandit(store)
-        bandit.update(structure.kind, VolRegime.NORMAL, won=bool(forced.label))
+        # The lifecycle already fed the bandit through feed_learners, from the
+        # label it derived from the realised close. Updating again here would
+        # double-count the pull.
         posteriors = store.bandit_posteriors(str(VolRegime.NORMAL))
         if str(structure.kind) not in posteriors:
             raise DrillFailed("bandit posterior did not update")
