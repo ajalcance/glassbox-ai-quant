@@ -106,11 +106,22 @@ gate:
   # thesis entered with forty minutes left cannot resolve; we would be paying
   # entry cost for an outcome that has no room to occur.
   min_session_fraction: 0.5
-  # Option liquidity check. Live Fri session: 5.0 correctly killed junk
-  # (CVX 57%, PYPL 36%) but also vetoed midday SPY at 6.5%. 10.0 passes
-  # liquid-underlying spreads while single-name junk stays vetoed; the
-  # price ladder still works from mid, bounding what a wide market costs.
-  max_spread_pct_of_mid: 10.0
+  # Option liquidity check — measured in INDICATIVE-feed units, and that
+  # matters. This cap is compared against quotes from Alpaca's free indicative
+  # feed, which soak/spread_calibration.py measured against real OPRA prints
+  # from the 31 Aug session: contracts printing 200-1,475 times at 1.4-3.0%
+  # effective spread were being quoted at 15.0-17.3% by the feed (5-12x
+  # inflation on single names; SPY only ~1.3-2x). At 10.0 the check was
+  # refusing genuinely liquid trades — AMZN was vetoed at a measured 15.0% on
+  # a leg that printed 1,475 times at ~1.9% real. 20.0 in indicative units is
+  # roughly 3-4% of real spread for print-rich names, while genuinely thin
+  # books (XLK condor legs: 13-25 prints/day, quoted 34.7%) stay excluded.
+  # History: 5.0 -> 10.0 on Fri (live calibration), 10.0 -> 20.0 on 1 Sep
+  # (feed-inflation measurement). Slippage protection does not live here
+  # anyway: entries start at mid and the price ladder bounds what a wide
+  # market can cost; this check exists to exclude dead contracts, which the
+  # OI floor below also enforces.
+  max_spread_pct_of_mid: 20.0
   min_open_interest: 200
   # Concentration. Two positions in one underlying is already a doubled thesis;
   # a third is a bet, not a portfolio. The dollar cap above

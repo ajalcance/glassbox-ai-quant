@@ -240,8 +240,21 @@ at any point.**
 *indicative* options feed rather than OPRA. Pricing uses latest quotes and
 snapshots, which are real-time on Basic; the 15-minute restriction applies only
 to historical bars and trades, which are used solely for daily realised
-volatility. The liquidity gate's spread threshold is calibrated to what the
-indicative feed actually shows.
+volatility.
+
+The liquidity gate's threshold is **calibrated to the feed it measures, from
+data rather than guesswork**. `soak/spread_calibration.py` compares the spread
+the gate recorded at decision time (indicative) against effective spreads
+estimated from real OPRA prints — which Basic *does* provide, delayed —
+using intra-minute price range and the Roll (1984) estimator. The 31 August
+session showed single-name contracts printing 200–1,475 times at 1.4–3.0%
+effective spread while the indicative feed quoted them at 15.0–17.3% — a
+5–13× inflation (SPY: only ~1.3–2×). One vetoed AMZN leg had printed 1,475
+times that day at ~1.9% real spread. The cap was moved from 10% to 20% *in
+indicative units*, which the measurement shows is roughly 4% of real spread
+for print-rich names; genuinely thin contracts (13–25 prints/day, quoted
+34.7%) remain excluded, and the open-interest floor is unaffected. The tool
+and its output are in the repo — rerun it against any session's audit log.
 
 ## Disclaimers
 
