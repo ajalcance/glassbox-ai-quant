@@ -105,6 +105,9 @@ class Trader:
         # than inventing numbers — see meta_label() and select_structure().
         self.meta_labeler = meta_labeler
         self.bandit = bandit
+        # Signals refused only on the opening-auction window, awaiting one
+        # retry once it opens: signal_id -> (item, analyst view).
+        self._deferred: dict[str, tuple] = {}
 
     # -- helpers ----------------------------------------------------------
     def _drop(self, stage: str, item: NewsItem, reason: str, **extra) -> Outcome:
@@ -382,11 +385,47 @@ class Trader:
         if not sizing.approved:
             return self._drop("sizing", item, sizing.reason, signal_id=signal_id)
 
+        # 6b. fit the quantity to the delta band. Sizing answers "how much can
+        # the budget carry" without ever seeing delta, and the gate answers
+        # yes/no on whatever arrives — so a qty of 2 that breached the band
+        # killed the whole trade instead of becoming the 1 that fits. On
+        # 31 Aug that binary refused the session's best signals at qty=2 and
+        # -$48k of delta when qty=1 at -$24k was inside the band. The band
+        # itself does not move here; it binds gradually instead of all at once,
+        # exactly as the heat and drawdown tapers already do.
+        qty = sizing.qty
+        book_greeks = self.data.post_trade_greeks(structure, 0)
+        one_greeks = self.data.post_trade_greeks(structure, 1)
+        per_spread_delta = one_greeks.delta_dollars - book_greeks.delta_dollars
+        band = self.cfg.risk.delta_dollars_band
+        if per_spread_delta:
+            while qty >= 1 and abs(book_greeks.delta_dollars + per_spread_delta * qty) > band:
+                qty -= 1
+            if qty < 1:
+                return self._drop(
+                    "delta_fit",
+                    item,
+                    f"one spread carries ${per_spread_delta:,.0f} of delta against "
+                    f"${band - abs(book_greeks.delta_dollars):,.0f} of remaining band",
+                    signal_id=signal_id,
+                )
+            if qty < sizing.qty:
+                self.audit.append(
+                    "delta_fit",
+                    {
+                        "signal_id": signal_id,
+                        "requested_qty": sizing.qty,
+                        "fitted_qty": qty,
+                        "per_spread_delta_dollars": per_spread_delta,
+                        "book_delta_dollars": book_greeks.delta_dollars,
+                    },
+                )
+
         # 7. the gate — deterministic, non-bypassable
         blackout = self.corporate_blackout(item.symbol, structure, view.horizon_hours)
         ctx = GateContext(
             structure=structure,
-            qty=sizing.qty,
+            qty=qty,
             max_loss_per_spread=risk,
             meta_label_p=p,
             equity=market.equity,
@@ -400,7 +439,7 @@ class Trader:
             halted=is_halted(self.store),
             kill_switch=self.data.kill_switch(),
             portfolio=portfolio,
-            post_trade_greeks=self.data.post_trade_greeks(structure, sizing.qty),
+            post_trade_greeks=self.data.post_trade_greeks(structure, qty),
             correlations=self.data.correlations(),
             spread_pct_of_mid=spread_pct,
             open_interest=oi,
@@ -416,13 +455,45 @@ class Trader:
             {
                 "signal_id": signal_id,
                 "structure": structure_key(structure),
-                "qty": sizing.qty,
-                "max_loss": risk * sizing.qty,
+                "qty": qty,
+                "max_loss": risk * qty,
                 "sizing_reason": sizing.reason,
                 **decision.as_dict(),
             },
         )
         if not decision.approved:
+            # Deferral, not discard, for the opening-auction window alone. The
+            # check's intent is "not yet", but a discarded signal was "not
+            # ever": _seen_news blocks reprocessing, so a story arriving at
+            # minute 11 was never looked at again at minute 16. On 31 Aug the
+            # session's two strongest signals (ratios 1.97 and 1.74) were lost
+            # exactly this way. A signal refused ONLY on market_window during
+            # the opening skip is queued and re-entered once the window opens,
+            # reusing this analyst view (a second call could change the
+            # opinion); staleness is enforced again at retry, and every other
+            # stage re-runs in full.
+            failed = [c for c in decision.checks if not c.passed]
+            in_opening = market.minutes_since_open < self.cfg.gate.skip_first_minutes
+            if (
+                in_opening
+                and failed
+                and all(c.name == "market_window" for c in failed)
+                and not getattr(self, "_floor_mode", False)
+                and len(self._deferred) < 10
+            ):
+                self._deferred[signal_id] = (item, view)
+                self.audit.append(
+                    "signal_deferred",
+                    {
+                        "signal_id": signal_id,
+                        "symbol": item.symbol,
+                        "minutes_since_open": market.minutes_since_open,
+                        "reason": decision.reason,
+                    },
+                )
+                return Outcome("deferred", False, f"opening auction — retry after "
+                               f"{self.cfg.gate.skip_first_minutes}m: {decision.reason}",
+                               signal_id)
             return Outcome("gate", False, decision.reason, signal_id)
 
         # 8. execute
@@ -434,9 +505,9 @@ class Trader:
             underlying=item.symbol,
             kind=str(kind),
             legs_json=self._legs_json(structure),
-            qty=sizing.qty,
+            qty=qty,
             entry_price=net_price,
-            max_loss=risk * sizing.qty,
+            max_loss=risk * qty,
             status="opening",
             horizon_hours=effective_horizon,
             opened_at=self.clock().isoformat(),
@@ -450,11 +521,11 @@ class Trader:
             thesis_move_pct=float(view.expected_move_pct),
             entry_spot=float(spot),
         )
-        self.router.submit_structure(structure, sizing.qty, net_price, coid, position_id)
+        self.router.submit_structure(structure, qty, net_price, coid, position_id)
         return Outcome(
             "executed",
             True,
-            f"{kind} x{sizing.qty} at {net_price:+.2f} (risk ${risk * sizing.qty:,.0f})",
+            f"{kind} x{qty} at {net_price:+.2f} (risk ${risk * qty:,.0f})",
             signal_id,
         )
 
@@ -609,6 +680,38 @@ class Trader:
                 "headline": item.headline[:160],
             },
         )
+
+    def retry_deferred(self, market) -> list[Outcome]:
+        """Re-enter signals parked by the opening-auction window, once each.
+
+        Runs from the management tick. Each deferred signal gets exactly one
+        retry: it is popped before processing, so an outcome — traded, vetoed,
+        or dropped — is final. Staleness is enforced here because the retry
+        reuses the saved analyst view and therefore skips the filter that
+        would normally enforce it; the window skip must not become a loophole
+        for trading old news.
+        """
+        if not self._deferred or not market.is_open:
+            return []
+        if market.minutes_since_open < self.cfg.gate.skip_first_minutes:
+            return []  # still inside the window; keep waiting
+        outcomes = []
+        max_age = self.cfg.signal.max_news_age_hours * 3600
+        for signal_id in list(self._deferred):
+            item, view = self._deferred.pop(signal_id)
+            age = (self.clock() - item.created_at).total_seconds()
+            if age > max_age:
+                outcomes.append(
+                    self._drop(
+                        "deferred_expired",
+                        item,
+                        f"stale by {age / 3600:.1f}h at retry",
+                        signal_id=signal_id,
+                    )
+                )
+                continue
+            outcomes.append(self.process_news(item, market, view_override=view))
+        return outcomes
 
     def maybe_floor_trade(self, market) -> Outcome | None:
         """Express the day's best idea at reduced size, once, late in the day.

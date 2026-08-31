@@ -213,18 +213,28 @@ two qty=1 candidates that cleared the band, and two qty=2 candidates that did
 not.
 
 R=1.0% and a $40,000 delta band are jointly inconsistent on the highest-notional
-underlying, so one had to give. **Reverting R is the risk-reducing resolution**
-and restores the value every pre-contest test ran under. Raising the band was
-the alternative and was explicitly rejected: loosening a directional-exposure
-limit in order to obtain trades is optimisation on contest data, which this
-project forbids itself. The proper fix — sizing choosing the largest qty that
-fits the delta band, as it already tapers for heat and drawdown — is new code
-in the sizing path and is deferred until after the window closes.
+underlying, so one had to give. **Reverting R was the risk-reducing resolution**
+for day one. Raising the band was the alternative and was explicitly rejected:
+loosening a directional-exposure limit in order to obtain trades is optimisation
+on contest data, which this project forbids itself.
+
+**On 1 September the interaction itself was fixed and R restored to 1.0%.** The
+pipeline now fits quantity to the delta band before the gate — a candidate that
+would breach at qty 2 becomes the qty 1 that fits, exactly as sizing already
+tapers for heat and drawdown — instead of the gate answering yes/no on a number
+sizing never saw. The same change class covers the opening-auction window,
+which used to *discard* signals arriving in its first fifteen minutes
+(day one's two strongest, ratios 1.97 and 1.74, were lost this way); they are
+now deferred and re-entered once the window opens, with staleness re-enforced
+at retry. With the interaction gone, the original pre-window reasoning for
+R=1.0% stands unchanged, and the full history — raised, interaction found on
+day one, reverted, interaction fixed, restored — is in this section, the config
+comments, and the audit log rather than smoothed over.
 
 Every hard limit is unchanged throughout: 1.5% max loss per position, 3% per
 underlying, 6% portfolio heat, ±$40k net delta, −2% daily loss halt, −6% max
-drawdown halt, and defined risk on every leg. No risk limit has been widened at
-any point.
+drawdown halt, and defined risk on every leg. **No risk limit has been widened
+at any point.**
 
 **Market data.** Runs on Alpaca's free Basic plan, which provides the
 *indicative* options feed rather than OPRA. Pricing uses latest quotes and

@@ -286,6 +286,14 @@ class Runner:
         for outcome in self.trader.manage_positions(now_utc(), self._deadline):
             print(f"[{now_utc():%H:%M:%S}] CLOSE {outcome.reason[:110]}")
         try:
+            for outcome in self.trader.retry_deferred(self.market_state()):
+                marker = "TRADE" if outcome.traded else "retry"
+                print(f"[{now_utc():%H:%M:%S}] {marker} deferred: {outcome.reason[:100]}")
+        except Exception as e:  # noqa: BLE001 -- a failed retry pass must not
+            # take the tick down; the deferred entries are already popped or
+            # will expire on staleness.
+            self.audit.append("deferred_retry_error", {"error": f"{type(e).__name__}: {e}"})
+        try:
             floor = self.trader.maybe_floor_trade(self.market_state())
             if floor is not None:
                 marker = "FLOOR TRADE" if floor.traded else "floor declined"

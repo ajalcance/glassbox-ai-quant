@@ -247,6 +247,84 @@ def test_position_for_signal_lookup(store):
     assert row is not None and row["position_id"] == "pos-AAPL-n1"
 
 
+class QtyAwareGreeks:
+    """StubData variant whose post-trade delta actually depends on qty, so the
+    delta-fit step has something real to fit against."""
+
+    def __init__(self, base: StubData, per_spread: float, book: float = 0.0):
+        self._base = base
+        self.per_spread = per_spread
+        self.book = book
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+    def post_trade_greeks(self, structure, qty):
+        return Greeks(delta_dollars=self.book + self.per_spread * qty)
+
+
+def test_delta_fit_trims_qty_instead_of_losing_the_trade(store, audit):
+    """The 31 Aug failure: sizing asked for 2, the band fit 1, and the binary
+    gate refused the trade outright. The fit must trim to the qty that fits."""
+    router = StubRouter()
+    data = QtyAwareGreeks(StubData(), per_spread=-24_000)  # 2 spreads breach ±40k
+    t = make_trader(store, audit, router=router, data=data)
+    outcome = t.process_news(news(), market())
+    assert outcome.traded, outcome.reason
+    assert router.submitted[0]["qty"] == 1, "qty must be trimmed to fit the band, not vetoed"
+    fits = [r for r in _audit_records(audit) if r.get("kind") == "delta_fit"]
+    assert fits and fits[0]["fitted_qty"] == 1 and fits[0]["requested_qty"] >= 2
+
+
+def test_delta_fit_drops_when_even_one_spread_cannot_fit(store, audit):
+    router = StubRouter()
+    data = QtyAwareGreeks(StubData(), per_spread=-55_000)  # one spread breaches alone
+    t = make_trader(store, audit, router=router, data=data)
+    outcome = t.process_news(news(), market())
+    assert not outcome.traded and outcome.stage == "delta_fit"
+    assert router.submitted == []
+
+
+def test_opening_window_defers_and_retries_instead_of_discarding(store, audit):
+    """A signal at minute 11 must be parked and re-entered at minute 16 — the
+    31 Aug session lost its two strongest signals (ratios 1.97, 1.74) to a
+    window whose intent was 'not yet' but whose code meant 'not ever'."""
+    router = StubRouter()
+    t = make_trader(store, audit, router=router)
+    early = market(minutes_since_open=11)
+    outcome = t.process_news(news(), early)
+    assert outcome.stage == "deferred" and not outcome.traded
+    assert router.submitted == [], "nothing may reach the router inside the window"
+    assert any(r.get("kind") == "signal_deferred" for r in _audit_records(audit))
+
+    # Still inside the window: retry does nothing.
+    assert t.retry_deferred(market(minutes_since_open=13)) == []
+    assert router.submitted == []
+
+    # Window open: exactly one retry, which trades.
+    outcomes = t.retry_deferred(market(minutes_since_open=16))
+    assert len(outcomes) == 1 and outcomes[0].traded, outcomes[0].reason
+    assert len(router.submitted) == 1
+    assert t.retry_deferred(market(minutes_since_open=17)) == [], "one retry only"
+
+
+def test_deferred_signal_expires_on_staleness_at_retry(store, audit):
+    """The retry path skips the filter, so staleness must be enforced here —
+    the window skip must not become a loophole for trading old news."""
+    router = StubRouter()
+    t = make_trader(store, audit, router=router)
+    old = news(created_at=NOW - timedelta(hours=3))
+    t.process_news(old, market(minutes_since_open=11))
+    # Nothing deferred: a 3h-old story already fails the filter outright.
+    stale_boundary = news(created_at=NOW - timedelta(hours=1, minutes=50))
+    assert t.process_news(stale_boundary, market(minutes_since_open=11)).stage == "deferred"
+    # Simulate the clock crossing max_news_age before the retry fires.
+    t.clock = lambda: NOW + timedelta(minutes=15)
+    outcomes = t.retry_deferred(market(minutes_since_open=16))
+    assert len(outcomes) == 1 and outcomes[0].stage == "deferred_expired"
+    assert router.submitted == []
+
+
 def test_every_stage_is_audited(store, audit):
     t = make_trader(store, audit)
     t.process_news(news(), market())

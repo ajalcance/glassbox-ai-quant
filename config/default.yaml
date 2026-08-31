@@ -25,10 +25,17 @@ risk:
   # loosening a directional-exposure limit in order to obtain trades is
   # optimisation on contest data, which this project forbids itself.
   #
-  # The proper fix is for sizing to choose the largest qty that fits the delta
-  # band, exactly as it already tapers for heat and drawdown. Deferred until
-  # after 3 Sep because it is new code in the sizing path.
-  r_per_trade_pct: 0.5
+  # RESTORED to 1.0 on 1 Sep, after the interaction that forced the revert was
+  # fixed: the pipeline now fits qty to the delta band (trader.py step 6b)
+  # instead of asking the gate a yes/no question about a number sizing never
+  # saw. With that in place the original pre-window reasoning stands — the
+  # abstaining meta-labeler multiplies budgets down to 0.4-0.5x, and at
+  # R=0.5 that produced ~$200-300 budgets that int(budget // risk) turned into
+  # zero contracts for most spreads (31 Aug: ten tradable edges died there,
+  # one $7 short of a single contract). The full history — raised, interaction
+  # found on day one, reverted, interaction fixed, restored — is in the README
+  # and the audit log. The delta band itself has never moved.
+  r_per_trade_pct: 1.0
   max_loss_per_position_pct: 1.5
   max_loss_per_underlying_pct: 3.0
   portfolio_heat_pct: 6.0        # sum of max-loss across open positions
