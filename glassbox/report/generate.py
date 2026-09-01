@@ -99,12 +99,19 @@ def collect(audit_dir: str | Path, day: date | None = None) -> DayStats:
         elif kind in ("order_submit", "dry_run_order"):
             if not r.get("closing"):
                 s.orders_submitted += 1
-        elif kind == "manage" and r.get("action") == "close":
+        elif kind == "close_filled":
+            # Count closes from the FILL, not the manage decision. The manage
+            # record carries the decision-time estimate (COIN 1 Sep: decided
+            # at $0 on the break-even barrier, realised -$10 after the close
+            # escalated twice), and a close that dies and retries would count
+            # once per decision. close_filled happens exactly once per close
+            # and carries the realised P&L from actual fill prices — the same
+            # observer-computes-its-own-P&L class the drills were cured of.
             s.positions_closed += 1
-            barriers[r.get("barrier", "unknown")] += 1
-            pnl = float(r.get("unrealized_pnl") or 0.0)
+            barriers[str(r.get("barrier", "unknown")).replace("Barrier.", "")] += 1
+            pnl = float(r.get("realized_pnl") or 0.0)
             s.realized_pnl += pnl
-            if r.get("label") == 1:
+            if pnl > 0:
                 s.wins += 1
             else:
                 s.losses += 1

@@ -82,28 +82,24 @@ def test_vetoes_and_drops_are_attributed(tmp_path):
 
 
 def test_closed_positions_aggregate_pnl_and_barriers(tmp_path):
+    """Closes are counted from the FILL, never the manage decision. The
+    manage record carries a decision-time estimate (COIN 1 Sep: decided at
+    $0 on break-even, realised -$10 after escalation), and a retried close
+    would count once per decision."""
     day = seed(
         tmp_path,
-        (
-            "manage",
-            {
-                "action": "close",
-                "barrier": "profit",
-                "unrealized_pnl": 60.0,
-                "label": 1,
-                "position_id": "p1",
-            },
-        ),
-        (
-            "manage",
-            {
-                "action": "close",
-                "barrier": "stop",
-                "unrealized_pnl": -120.0,
-                "label": 0,
-                "position_id": "p2",
-            },
-        ),
+        # decision records exist but must NOT drive the stats
+        ("manage", {"action": "close", "barrier": "profit", "unrealized_pnl": 75.0,
+                    "label": 1, "position_id": "p1"}),
+        ("manage", {"action": "close", "barrier": "stop", "unrealized_pnl": -100.0,
+                    "label": 0, "position_id": "p2"}),
+        # a close that died and was re-decided — one fill, one count
+        ("manage", {"action": "close", "barrier": "stop", "unrealized_pnl": -110.0,
+                    "label": 0, "position_id": "p2"}),
+        ("close_filled", {"position_id": "p1", "realized_pnl": 60.0,
+                          "barrier": "profit", "fill": 1.2}),
+        ("close_filled", {"position_id": "p2", "realized_pnl": -120.0,
+                          "barrier": "stop", "fill": 0.4}),
         ("manage", {"action": "hold", "barrier": "none", "position_id": "p3"}),
     )
     s = collect(tmp_path, day)
