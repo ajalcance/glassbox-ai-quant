@@ -570,6 +570,155 @@ def scenario_crash(ctx) -> None:
 # scenario: scheduler
 # --------------------------------------------------------------------------
 
+def scenario_lifecycle_races(ctx) -> None:
+    """The race family the contest's first entry exposed on 1 Sep, replayed
+    deliberately: write-ahead intent vs reconcile, the same-tick cancel vs the
+    orphan sweep, the pending zombie, and the close-fill band. The live
+    failures were *timing* holes, so every phase here runs under continuous
+    concurrent enforce() fire from 8 threads rather than as sequential checks
+    — a hole one tick wide is exactly what this scenario exists to hit.
+    """
+    from types import SimpleNamespace
+
+    from glassbox.execution import lifecycle
+    from glassbox.execution.router import legs_as_dicts
+    from glassbox.reconcile import enforce
+    from glassbox.structures import structure_key
+
+    f, client, workdir, cfg = ctx["findings"], ctx["client"], ctx["workdir"], ctx["cfg"]
+    structure = ctx["structure"]
+    key = structure_key(structure)
+    legs = legs_as_dicts(structure)
+
+    store = Store(workdir / "races.db")
+    audit = AuditLog(workdir / "audit", role="races")
+    router = OrderRouter(client, store, audit)
+    trader = SimpleNamespace(cfg=cfg, store=store, audit=audit, router=router)
+
+    halts: list[str] = []
+    hammer_errors: list[str] = []
+    stop = threading.Event()
+    broker_view: list = []  # what the hammer threads present as broker truth
+
+    def hammer():
+        hstore = Store(workdir / "races.db")
+        haudit = AuditLog(workdir / "audit", role=f"races-{threading.current_thread().name}")
+        try:
+            while not stop.is_set():
+                try:
+                    r = enforce(hstore, haudit, list(broker_view))
+                    if not r.ok:
+                        halts.append(r.reason)
+                except Exception as e:  # noqa: BLE001 -- a raise here IS a finding
+                    hammer_errors.append(f"{type(e).__name__}: {e}")
+                time.sleep(0.02)
+        finally:
+            hstore.close()
+
+    threads = [threading.Thread(target=hammer, name=f"h{n}") for n in range(8)]
+    for t in threads:
+        t.start()
+
+    try:
+        # -- 1. resting entry under reconcile fire (the 14:32 GOOGL halt) ----
+        sid = f"soak-races-{ctx['run_id']}"
+        coid = client_order_id(sid, key)
+        ctx["coids"].add(coid)
+        pid = f"pos-{sid}"
+        store.upsert_position(
+            pid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+            qty=1, max_loss=380.0, status="opening",
+        )
+        router.submit_structure(structure, 1, RESTING_LIMIT, coid, pid)
+        time.sleep(3)  # ~150 enforce passes across 8 threads while the order rests
+        f.bad(not halts, "races", "resting_entry_no_halt",
+              "no halt while the entry order rested (write-ahead intent excused)",
+              f"HALTED during a legitimate resting entry: {halts[:2]}",
+              severity="CRITICAL")
+
+        # -- 2. same-tick cancel vs the sweep (the orphan) -------------------
+        row = store.get_order(coid)
+        router.cancel(coid, row["alpaca_order_id"])  # row flips canceled in-tick
+        events = lifecycle.sync(trader, datetime.now(UTC))
+        prow = store.get_position(pid)
+        f.bad(prow["status"] == "failed", "races", "sweep_resolves_cancel",
+              "sweep failed the position the same tick its order died out-of-band",
+              f"position stuck at '{prow['status']}' after out-of-band cancel "
+              f"(events: {events})", severity="CRITICAL")
+        pre = len(halts)
+        time.sleep(1)
+        f.bad(len(halts) == pre and not halts, "races", "no_halt_after_sweep",
+              "reconcile stayed clean through cancel and sweep",
+              f"halts after sweep: {halts[pre:][:2]}")
+
+        # -- 3. the pending zombie (crash between record and submit) ---------
+        zsid = f"{sid}-zombie"
+        zcoid = client_order_id(zsid, key)
+        zpid = f"pos-{zsid}"
+        store.record_order(zcoid, "open", legs, RESTING_LIMIT, zpid)  # never submitted
+        store.upsert_position(
+            zpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+            qty=1, max_loss=380.0, status="opening",
+        )
+        aged = datetime.now(UTC).timestamp() - (cfg.execution.entry_fill_timeout_minutes * 60 + 60)
+        store.update_order(zcoid, created_at=datetime.fromtimestamp(aged, UTC).isoformat())
+        events = lifecycle.sync(trader, datetime.now(UTC))  # broker 404s the poll
+        zrow = store.get_position(zpid)
+        f.bad(zrow["status"] == "failed" and not store.orders_in_flight(),
+              "races", "zombie_voided",
+              "unconfirmed pending order voided and its position failed",
+              f"zombie survives: position '{zrow['status']}', "
+              f"{len(store.orders_in_flight())} still in flight (events: {events})",
+              severity="CRITICAL")
+
+        # -- 4. the close-fill band, all four corners, still under fire ------
+        cpid = f"pos-{sid}-close"
+        ccoid = f"gbx-o-{sid}-close"
+        store.upsert_position(
+            cpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+            qty=2, max_loss=380.0, status="closing",
+        )
+        store.record_order(ccoid, "close", legs, 0.50, cpid)
+
+        def broker_legs(fraction):
+            out = []
+            for leg in legs:
+                signed = leg["ratio_qty"] * 2 * (1 if leg["side"] == "long" else -1)
+                q = int(signed * fraction)
+                if q:
+                    out.append(SimpleNamespace(symbol=leg["symbol"], qty=q))
+            return out
+
+        pre = len(halts)
+        for label, fraction in (("unfilled", 1.0), ("half_closed", 0.5), ("fully_closed", 0.0)):
+            broker_view[:] = broker_legs(fraction)
+            time.sleep(1)
+        f.bad(len(halts) == pre, "races", "close_band_no_halt",
+              "no halt at any legal point of a working close (full/half/flat)",
+              f"halted inside the close band: {halts[pre:][:2]}", severity="CRITICAL")
+
+        # ...and the band must still END somewhere: a dead close order with
+        # the broker flat is a real divergence, not a tolerance.
+        store.update_order(ccoid, status="canceled")
+        broker_view[:] = []
+        time.sleep(1)
+        f.bad(any("local-only" in h for h in halts[pre:]), "races", "band_still_bounded",
+              "dead close order + flat broker still halts (the band has edges)",
+              "no halt for a genuinely orphaned close — the band excused too much")
+        store.upsert_position(cpid, status="closed")
+
+        f.bad(not hammer_errors, "races", "enforce_thread_safe",
+              "8 concurrent enforce threads, zero exceptions",
+              f"enforce raised under contention: {hammer_errors[:3]}",
+              severity="CRITICAL")
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(timeout=10)
+        store.set_state("halt_reason", "")  # scenario-local db; leave it clean
+        store.close()
+
+
 def scenario_scheduler(ctx) -> None:
     import sqlite3
 
@@ -660,6 +809,7 @@ SCENARIOS = {
     "sqlite": (scenario_sqlite, False),
     "kill": (scenario_kill, True),
     "crash": (scenario_crash, True),
+    "races": (scenario_lifecycle_races, True),
     "scheduler": (scenario_scheduler, False),
 }
 
