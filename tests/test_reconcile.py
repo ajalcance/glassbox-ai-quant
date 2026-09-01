@@ -80,6 +80,63 @@ def test_resting_order_alone_does_not_halt(store, audit):
     assert not is_halted(store)
 
 
+def test_opening_position_with_working_entry_order_does_not_halt(store, audit):
+    """The 1 Sep live halt: entry submitted, order resting NEW at the broker,
+    position row 'opening'. The legs are expected to be absent — that is what
+    'opening' means. record_order + upsert_position together is what the
+    trader actually writes; testing the order row alone is what let this
+    through 400 tests."""
+    store.record_order("gbx-o-1", "open", [SHORT_PUT, LONG_PUT], -0.91, "pos-1")
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="opening")
+    result = enforce(store, audit, broker_positions=[])
+    assert result.ok, result.reason
+    assert not is_halted(store)
+
+
+def test_opening_position_partially_filled_within_band_does_not_halt(store, audit):
+    """1 of 2 spreads filled while the order still works: broker quantities sit
+    between nothing-filled and fully-filled, which is legal mid-flight."""
+    store.record_order("gbx-o-1", "open", [SHORT_PUT, LONG_PUT], -0.91, "pos-1")
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="opening")
+    broker = [FakeBrokerPos("SPY260918P00440000", -1), FakeBrokerPos("SPY260918P00435000", 1)]
+    result = enforce(store, audit, broker)
+    assert result.ok, result.reason
+
+
+def test_opening_position_overfilled_beyond_band_halts(store, audit):
+    """More at the broker than the working order could ever deliver is a real
+    divergence, opening status or not."""
+    store.record_order("gbx-o-1", "open", [SHORT_PUT, LONG_PUT], -0.91, "pos-1")
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="opening")
+    broker = [FakeBrokerPos("SPY260918P00440000", -3), FakeBrokerPos("SPY260918P00435000", 3)]
+    result = enforce(store, audit, broker)
+    assert not result.ok
+    assert "qty mismatch" in result.reason
+
+
+def test_opening_position_whose_order_vanished_halts(store, audit):
+    """'opening' is only excused while its entry order is actually working.
+    Order canceled with the row still 'opening' is unexplained state."""
+    store.record_order("gbx-o-1", "open", [SHORT_PUT, LONG_PUT], -0.91, "pos-1")
+    store.update_order("gbx-o-1", status="canceled")
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="opening")
+    result = enforce(store, audit, broker_positions=[])
+    assert not result.ok
+    assert "local-only" in result.reason
+    assert is_halted(store)
+
+
+def test_broker_only_still_halts_alongside_pending_entry(store, audit):
+    """A pending entry excuses ITS legs only — an unrelated broker position is
+    still the dangerous case."""
+    store.record_order("gbx-o-1", "open", [SHORT_PUT, LONG_PUT], -0.91, "pos-1")
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="opening")
+    broker = [FakeBrokerPos("SPY260918C00460000", -1)]
+    result = enforce(store, audit, broker)
+    assert not result.ok
+    assert "broker-only" in result.reason
+
+
 def test_closed_positions_excluded_from_heat_and_reconcile(store, audit):
     add_position(store, "pos-old", [SHORT_PUT, LONG_PUT], status="closed")
     assert reconcile(store, []).ok

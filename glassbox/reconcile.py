@@ -39,10 +39,10 @@ class ReconcileResult:
         return "; ".join(parts) or "in sync"
 
 
-def _local_leg_quantities(store) -> dict[str, int]:
-    """Signed contract count per option symbol implied by our open positions."""
+def _leg_quantities(rows) -> dict[str, int]:
+    """Signed contract count per option symbol implied by position rows."""
     totals: dict[str, int] = {}
-    for row in store.open_positions():
+    for row in rows:
         qty = int(row["qty"])
         for leg in json.loads(row["legs_json"]):
             signed = leg["ratio_qty"] * qty * (1 if leg["side"] == "long" else -1)
@@ -62,14 +62,40 @@ def _broker_leg_quantities(broker_positions) -> dict[str, int]:
 
 
 def reconcile(store, broker_positions) -> ReconcileResult:
-    """Pure comparison — no side effects. Caller decides whether to halt."""
-    local = _local_leg_quantities(store)
+    """Pure comparison — no side effects. Caller decides whether to halt.
+
+    A position whose entry order is still working is *expected* to be absent
+    at the broker — the whole point of an 'opening' status is that the fill
+    has not happened yet. Its legs are therefore compared as a band (nothing
+    filled … fully filled) rather than demanded outright. Found live on
+    1 Sep: the first resting entry order of the contest halted the system 56s
+    after submission, because these legs were counted as already held. The
+    moment the entry order resolves without a fill, the 'opening' row stops
+    being excused and any leftover divergence halts as before.
+    """
+    in_flight_rows = store.orders_in_flight()
+    pending_open_pids = {r["position_id"] for r in in_flight_rows if r["intent"] == "open"}
+
+    settled_rows, pending_rows = [], []
+    for row in store.open_positions():
+        if row["status"] == "opening" and row["position_id"] in pending_open_pids:
+            pending_rows.append(row)
+        else:
+            settled_rows.append(row)
+
+    settled = _leg_quantities(settled_rows)
+    pending = _leg_quantities(pending_rows)
     broker = _broker_leg_quantities(broker_positions)
 
-    local_only = tuple(sorted(set(local) - set(broker)))
-    broker_only = tuple(sorted(set(broker) - set(local)))
-    mismatch = tuple(sorted(s for s in set(local) & set(broker) if local[s] != broker[s]))
-    in_flight = tuple(sorted(r["client_order_id"] for r in store.orders_in_flight()))
+    local_only = tuple(sorted(set(settled) - set(broker)))
+    broker_only = tuple(sorted(set(broker) - set(settled) - set(pending)))
+    mismatch = []
+    for s in set(broker) & (set(settled) | set(pending)):
+        lo, hi = sorted((settled.get(s, 0), settled.get(s, 0) + pending.get(s, 0)))
+        if not lo <= broker[s] <= hi:
+            mismatch.append(s)
+    mismatch = tuple(sorted(mismatch))
+    in_flight = tuple(sorted(r["client_order_id"] for r in in_flight_rows))
 
     ok = not (local_only or broker_only or mismatch)
     return ReconcileResult(
@@ -78,7 +104,7 @@ def reconcile(store, broker_positions) -> ReconcileResult:
         broker_only=broker_only,
         qty_mismatch=mismatch,
         in_flight=in_flight,
-        detail={"local": local, "broker": broker},
+        detail={"local": settled, "pending": pending, "broker": broker},
     )
 
 
