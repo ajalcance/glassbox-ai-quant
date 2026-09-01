@@ -160,6 +160,14 @@ manage:
   debit_profit_take_pct: 100
   debit_stop_pct: 40
   breakeven_trigger_pct: 50      # tighten stop to entry at 50% of target
+  # Trailing lock (2 Sep): once the peak reaches trail_arm_pct of the target,
+  # the position closes if P&L falls to trail_keep_pct of that peak. TLT on
+  # 1 Sep peaked at +$306 (78% of a +$391 target) and gave back $170 by the
+  # bell — between a full-double target and a zero floor nothing banked any
+  # of it. Arms above the break-even trigger so the two form a ladder:
+  # 50-60% of target protects zero; above 60% protects half the peak.
+  trail_arm_pct: 60
+  trail_keep_pct: 50
   min_hours_to_expiry: 24
   # An entry thesis should have an expiry condition, not only an expiry date.
   # Contradiction: later news on a held symbol that reverses the view we opened

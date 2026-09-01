@@ -283,7 +283,18 @@ class MarketData:
         return max(0.0, (close - now_utc()).total_seconds() / 3600)
 
     def structure_price(self, structure: Structure) -> float:
-        """Net mid to close, in the router's sign convention.
+        """Net price to close NOW, at the side we would actually hit, in the
+        router's sign convention: long legs are sold at the bid, short legs are
+        bought back at the ask.
+
+        Marked at mid until 2 Sep. COIN, 1 Sep: the mid said the spread was
+        worth 0.48 to close, the market wanted 0.58, and the break-even
+        barrier armed on a +$14 peak that never existed, fired at a phantom
+        $0, and paid $10 to get out. A mark is a liquidation value or it is a
+        wish; every barrier reads this number, so it reads the conservative
+        side. (On the indicative feed this is deliberately pessimistic — the
+        feed quotes wider than OPRA — which errs toward stops firing early
+        and targets late, the direction a risk system should err.)
 
         A missing quote raises rather than defaulting to zero — a structure
         priced at zero would read as a costless exit and mislead every barrier.
@@ -295,8 +306,10 @@ class MarketData:
             quote = getattr(snap, "latest_quote", None) if snap else None
             if not quote or quote.bid_price is None or quote.ask_price is None:
                 raise ValueError(f"no quote for {leg.symbol}; cannot price structure")
-            mid = (float(quote.bid_price) + float(quote.ask_price)) / 2
-            net += mid * leg.ratio_qty * (1 if leg.side is LegSide.LONG else -1)
+            if leg.side is LegSide.LONG:
+                net += float(quote.bid_price) * leg.ratio_qty  # we sell: receive the bid
+            else:
+                net -= float(quote.ask_price) * leg.ratio_qty  # we buy back: pay the ask
         return round(net, 2)
 
     def post_trade_greeks(self, structure: Structure, qty: int) -> Greeks:

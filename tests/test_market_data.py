@@ -57,6 +57,45 @@ def test_structure_price_refuses_to_default_a_missing_quote(store):
         md.structure_price(structure)
 
 
+def test_structure_price_marks_at_the_liquidation_side(store):
+    """COIN, 1 Sep: the mid said 0.48 to close, the market wanted 0.58, and
+    the break-even barrier acted on a peak that never existed. A mark is the
+    price we would actually get: long legs sold at the bid, short legs bought
+    back at the ask — never the mid."""
+    from glassbox.data.market import MarketData
+    from glassbox.structures import Leg, LegSide, Structure, StructureKind
+
+    md = MarketData(
+        trading_client=None, stock_client=None, option_client=None, store=store, root=None
+    )
+
+    def snap(bid, ask):
+        return type("S", (), {"latest_quote": type("Q", (), {"bid_price": bid, "ask_price": ask})()})()
+
+    md._cache[("snap", "SPY", date(2026, 9, 18))] = type(
+        "C",
+        (),
+        {
+            "value": {
+                "SPY260918P00440000": snap(1.00, 1.20),  # short leg: buy back at 1.20
+                "SPY260918P00435000": snap(0.40, 0.60),  # long leg: sell at 0.40
+            },
+            "at": __import__("glassbox.clock", fromlist=["x"]).now_utc(),
+        },
+    )()
+    structure = Structure(
+        StructureKind.BULL_PUT_SPREAD,
+        "SPY",
+        (
+            Leg("SPY260918P00440000", Right.PUT, 440, date(2026, 9, 18), LegSide.SHORT),
+            Leg("SPY260918P00435000", Right.PUT, 435, date(2026, 9, 18), LegSide.LONG),
+        ),
+    )
+    # liquidation: +0.40 (sell long) - 1.20 (buy back short) = -0.80
+    # the mid would have said +0.50 - 1.10 = -0.60 — 25% rosier
+    assert md.structure_price(structure) == pytest.approx(-0.80)
+
+
 def test_realized_vol_returns_none_rather_than_guessing(store, monkeypatch):
     """Sizing skips the volatility budget when vol is unknown; inventing a
     number would silently change position size."""

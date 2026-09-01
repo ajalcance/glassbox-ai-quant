@@ -70,6 +70,7 @@ class Barrier(StrEnum):
     STOP = "stop"
     TIME = "time"
     BREAKEVEN = "breakeven"
+    TRAIL = "trail"
     DEADLINE = "deadline"
     EXPIRY_RISK = "expiry_risk"
     MACRO_RISK = "macro_risk"
@@ -269,6 +270,23 @@ def evaluate_position(
 
     target = profit_target(view, cfg)
 
+    # Trailing lock: a position that earned most of its target keeps most of
+    # its peak. TLT, 1 Sep: +$306 (78% of target) gave back $170 by the bell
+    # with nothing between a full-double target and a break-even floor at
+    # zero to bank any of it. Arms above the break-even trigger, so the two
+    # form a ladder — protect zero, then protect the peak.
+    trail_armed = view.peak_pnl >= target * (cfg.manage.trail_arm_pct / 100)
+    keep = view.peak_pnl * (cfg.manage.trail_keep_pct / 100)
+    if trail_armed and pnl <= keep:
+        return ManageDecision(
+            Action.CLOSE,
+            Barrier.TRAIL,
+            f"trailing lock: peaked at ${view.peak_pnl:+,.0f}, now ${pnl:+,.0f} "
+            f"— banking at the {cfg.manage.trail_keep_pct:.0f}% floor ${keep:+,.0f}",
+            pnl,
+            label,
+        )
+
     # Break-even: a position that earned most of its target may not be allowed
     # to round-trip into a loss.
     breakeven_armed = view.peak_pnl >= target * (cfg.manage.breakeven_trigger_pct / 100)
@@ -315,6 +333,7 @@ def evaluate_position(
         Barrier.NONE,
         f"${pnl:+,.0f} between stop ${stop:+,.0f} and target ${target:+,.0f}"
         f"{'; break-even armed' if breakeven_armed else ''}"
+        f"{f'; trail armed at ${keep:+,.0f}' if trail_armed else ''}"
         f"{'; horizon elapsed — riding a bounded loss' if horizon_elapsed else ''}",
         pnl,
         None,

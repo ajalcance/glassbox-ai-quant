@@ -77,6 +77,8 @@ class ManageCfg(BaseModel):
     debit_profit_take_pct: float
     debit_stop_pct: float
     breakeven_trigger_pct: float
+    trail_arm_pct: float
+    trail_keep_pct: float
     min_hours_to_expiry: int
     exit_on_contradiction: bool
     contradiction_min_confidence: float

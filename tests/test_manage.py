@@ -151,9 +151,45 @@ def test_expired_loser_still_bounded_by_deadline():
 
 
 def test_breakeven_stops_a_winner_becoming_a_loser():
-    # target is $60; peaked at $50 (>60% of target), now back to flat
-    d = evaluate_position(credit_view(current_price=-1.20, peak_pnl=50.0), CFG, LATER)
+    # target is $60; peaked at $33 (55% — above the break-even trigger, below
+    # the trail arm), now back to flat: the zero floor is the active layer
+    d = evaluate_position(credit_view(current_price=-1.20, peak_pnl=33.0), CFG, LATER)
     assert d.should_close and d.barrier is Barrier.BREAKEVEN
+
+
+# --- trailing lock -----------------------------------------------------------
+
+
+def test_trail_locks_half_the_peak_once_armed():
+    """TLT, 1 Sep: +$306 gave back $170 with nothing banking any of it. Once
+    the peak clears trail_arm_pct of target, falling to trail_keep_pct of
+    the peak closes — a winner keeps most of what it earned."""
+    # target $60; peaked at $50 (83%) -> armed, floor $25; now +$20
+    d = evaluate_position(credit_view(current_price=-1.00, peak_pnl=50.0), CFG, LATER)
+    assert d.should_close and d.barrier is Barrier.TRAIL and d.label == 1
+    assert "$+25" in d.reason
+
+
+def test_trail_holds_above_its_floor():
+    # peaked $50, floor $25, now +$40: still running
+    d = evaluate_position(credit_view(current_price=-0.80, peak_pnl=50.0), CFG, LATER)
+    assert d.action is Action.HOLD
+    assert "trail armed" in d.reason
+
+
+def test_trail_not_armed_below_arm_threshold():
+    # peaked $30 (50% of target): break-even armed, trail not; now +$10 holds
+    d = evaluate_position(credit_view(current_price=-1.10, peak_pnl=30.0), CFG, LATER)
+    assert d.action is Action.HOLD and "trail armed" not in d.reason
+
+
+def test_trail_outranks_breakeven_but_not_stop_or_profit():
+    # profit target still wins when hit outright
+    d = evaluate_position(credit_view(current_price=-0.55, peak_pnl=65.0), CFG, LATER)
+    assert d.barrier is Barrier.PROFIT
+    # a stop-level loss is a STOP, whatever the peak was
+    d = evaluate_position(credit_view(current_price=-3.20, peak_pnl=50.0), CFG, LATER)
+    assert d.barrier is Barrier.STOP
 
 
 def test_breakeven_not_armed_before_trigger():
