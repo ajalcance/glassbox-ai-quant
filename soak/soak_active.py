@@ -728,6 +728,71 @@ def scenario_lifecycle_races(ctx) -> None:
               "no halt for a genuinely orphaned close — the band excused too much")
         store.upsert_position(cpid, status="closed")
 
+        # -- 5. the entry ladder against a real resting order (2 Sep) -------
+        # A rung is a cancel-and-resubmit inside one tick, with a fresh coid;
+        # reconcile must keep excusing the position across the swap, and the
+        # thesis budget must run from the position's birth, not the rung's.
+        from datetime import timedelta
+
+        from glassbox.trader import Trader
+
+        trader._structure_from_row = lambda r: Trader._structure_from_row(trader, r)
+        lsid = f"{sid}-ladder"
+        lcoid = client_order_id(lsid, key, 0)
+        lpid = f"pos-{lsid}"
+        ctx["coids"].add(lcoid)
+        ex = cfg.execution
+        born = datetime.now(UTC) - timedelta(seconds=ex.entry_ladder_step_seconds + 5)
+        with tick_lock:
+            store.upsert_position(
+                lpid, signal_id=lsid, underlying=structure.underlying,
+                kind=str(structure.kind), legs_json=json.dumps(legs), qty=1,
+                max_loss=380.0, status="opening", opened_at=born.isoformat(),
+            )
+            router.submit_structure(structure, 1, RESTING_LIMIT, lcoid, lpid)
+        time.sleep(1)  # rests under fire, one step already elapsed
+        with tick_lock:
+            events = lifecycle.sync(trader, datetime.now(UTC))
+        rung = store.latest_order_for(lpid, "open")
+        if rung is not None:
+            ctx["coids"].add(rung["client_order_id"])
+        swapped = (
+            rung is not None
+            and rung["client_order_id"] != lcoid
+            and abs(float(rung["limit_price"]) - (RESTING_LIMIT + ex.entry_ladder_tick)) < 1e-9
+            and store.get_order(lcoid)["status"] == "canceled"
+        )
+        f.bad(swapped, "races", "ladder_rung_swapped",
+              f"rung 1 replaced the resting order at {RESTING_LIMIT + ex.entry_ladder_tick:+.2f} "
+              f"with a fresh coid",
+              f"no rung swap: latest={dict(rung) if rung else None}, events={events}",
+              severity="CRITICAL")
+        if swapped:
+            live = [o for o in broker_orders_for(client, rung["client_order_id"])
+                    if str(o.status).split(".")[-1].lower() in ("new", "accepted", "pending_new", "held")]
+            f.bad(len(live) == 1, "races", "ladder_rung_at_broker",
+                  "exactly one working order at the broker for the new rung",
+                  f"{len(live)} working orders at the broker for the rung coid")
+        pre = len(halts)
+        time.sleep(2)
+        f.bad(len(halts) == pre, "races", "ladder_swap_no_halt",
+              "reconcile stayed clean across the rung swap",
+              f"halted across a rung swap: {halts[pre:][:2]}", severity="CRITICAL")
+        # budget runs from birth: age the POSITION past the timeout, not the rung
+        with tick_lock:
+            store.upsert_position(
+                lpid,
+                opened_at=(datetime.now(UTC)
+                           - timedelta(minutes=ex.entry_fill_timeout_minutes, seconds=5)).isoformat(),
+            )
+            events = lifecycle.sync(trader, datetime.now(UTC))
+        lrow = store.get_position(lpid)
+        f.bad(lrow["status"] == "failed" and not store.orders_in_flight(),
+              "races", "ladder_budget_from_birth",
+              "expired on the position's age with rungs left unused; position failed, nothing in flight",
+              f"position '{lrow['status']}', {len(store.orders_in_flight())} in flight (events: {events})",
+              severity="CRITICAL")
+
         f.bad(not hammer_errors, "races", "enforce_thread_safe",
               "8 concurrent enforce threads, zero exceptions",
               f"enforce raised under contention: {hammer_errors[:3]}",

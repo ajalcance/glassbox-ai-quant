@@ -155,10 +155,42 @@ def main() -> int:
             print(f"    ...holding {remaining:.0f}s more so the monitor must sample it")
             time.sleep(remaining)
 
-        # 3. exit through the production path
+        # 3. marks and the barrier ladder, on real quotes (2 Sep)
+        from datetime import timedelta
+
+        from glassbox.manage import Barrier, PositionView, evaluate_position, stop_level
+        from glassbox.structures import StructureKind
+
         current = data.structure_price(structure)
+        check(current <= _mid + 1e-9, "liquidation_marks",
+              f"mark {current:+.2f} <= mid {_mid:+.2f} (long legs at the bid, shorts at the ask)"
+              if current <= _mid + 1e-9 else
+              f"mark {current:+.2f} ABOVE mid {_mid:+.2f} — marks are not liquidation-side")
+
+        now_utc = datetime.now(UTC)
+        expiry_dt = datetime(structure.expiry.year, structure.expiry.month,
+                             structure.expiry.day, 20, tzinfo=UTC)
+        view = PositionView(
+            position_id=position_id, kind=StructureKind(row["kind"]), qty=1,
+            entry_price=entry, current_price=current, max_loss_per_spread=max_loss,
+            opened_at=datetime.fromisoformat(row["opened_at"]), horizon_hours=24.0,
+            hours_to_expiry=(expiry_dt - now_utc).total_seconds() / 3600,
+            peak_pnl=max_loss * 2,  # injected: the position "peaked" past its target
+        )
+        decision = evaluate_position(view, cfg, now_utc + timedelta(minutes=1))
+        pnl = view.unrealized_pnl
+        expected = Barrier.TRAIL
+        if view.hours_to_expiry < cfg.manage.min_hours_to_expiry:
+            expected = Barrier.EXPIRY_RISK
+        elif pnl <= stop_level(view, cfg):
+            expected = Barrier.STOP
+        check(decision.should_close and decision.barrier is expected, "barrier_decides_close",
+              f"{decision.barrier} on real marks (pnl ${pnl:+,.0f}): {decision.reason[:70]}"
+              if decision.barrier is expected else
+              f"expected {expected}, got {decision.barrier} — {decision.reason[:70]}")
+
         close_coid = close_order_id(position_id, "hold-probe", 0)
-        store.set_state(f"close_barrier:{position_id}", "deadline")
+        store.set_state(f"close_barrier:{position_id}", str(decision.barrier))
         store.upsert_position(position_id, status="closing")
         router.submit_structure(structure, 1, round(-current, 2), close_coid,
                                 position_id, closing=True)
