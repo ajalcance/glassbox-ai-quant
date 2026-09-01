@@ -83,6 +83,7 @@ class ManageCfg(BaseModel):
     contradiction_min_materiality: float
     exit_on_thesis_complete: bool
     thesis_complete_fraction: float
+    bell_buffer_minutes: float
     flatten_all_at: str
 
 

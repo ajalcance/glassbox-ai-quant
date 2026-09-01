@@ -539,7 +539,19 @@ def test_intraday_horizon_truncates_to_the_close(store, audit):
     """A four-hour thesis with two hours left becomes a two-hour thesis, not an
     eighteen-hour overnight hold on a view that expired at the bell."""
     t = make_trader(store, audit)
-    assert t.effective_horizon(4.0, market(minutes_to_close=120)) == pytest.approx(2.0)
+    buffer = t.cfg.manage.bell_buffer_minutes / 60
+    assert t.effective_horizon(4.0, market(minutes_to_close=120)) == pytest.approx(2.0 - buffer)
+
+
+def test_truncated_horizon_lands_before_the_bell_not_on_it(store, audit):
+    """TLT, 1 Sep: a horizon truncated to exactly the close was unreachable —
+    the manager's last open-market tick came 25s before it, so the TIME
+    barrier that should have banked +$272 never fired. The truncation must
+    leave room for at least one management tick."""
+    t = make_trader(store, audit)
+    horizon = t.effective_horizon(4.0, market(minutes_to_close=120))
+    assert horizon * 60 <= 120 - t.cfg.manage.bell_buffer_minutes
+    assert t.cfg.manage.bell_buffer_minutes >= 2, "buffer must exceed one management tick"
 
 
 def test_intraday_horizon_left_alone_when_the_session_is_long_enough(store, audit):
@@ -579,8 +591,9 @@ def test_intraday_thesis_is_stored_truncated_end_to_end(store, audit):
     outcome = t.process_news(news(), market(minutes_to_close=200))
     assert outcome.traded, outcome.reason
     row = store.open_positions()[0]
-    assert float(row["horizon_hours"]) == pytest.approx(200 / 60), (
-        "a 6h thesis with 3h20m of session left must be stored as 3h20m"
+    buffer = t.cfg.manage.bell_buffer_minutes
+    assert float(row["horizon_hours"]) == pytest.approx((200 - buffer) / 60), (
+        "a 6h thesis with 3h20m of session left must be stored as 3h20m minus the bell buffer"
     )
 
 

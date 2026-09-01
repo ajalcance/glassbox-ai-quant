@@ -646,7 +646,11 @@ class Trader:
         """
         if horizon_hours > self.cfg.gate.intraday_horizon_hours:
             return horizon_hours
-        hours_to_close = max(0.0, market.minutes_to_close / 60)
+        # Truncate to the close minus a buffer, not the close itself: the
+        # manager only runs while the market is open, so a horizon landing
+        # exactly on the bell can never be observed elapsed (TLT, 1 Sep).
+        buffer_hours = self.cfg.manage.bell_buffer_minutes / 60
+        hours_to_close = max(0.0, market.minutes_to_close / 60 - buffer_hours)
         return min(horizon_hours, hours_to_close) if hours_to_close else horizon_hours
 
     # -- the daily best-idea floor ----------------------------------------
