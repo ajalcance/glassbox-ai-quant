@@ -600,13 +600,23 @@ def scenario_lifecycle_races(ctx) -> None:
     stop = threading.Event()
     broker_view: list = []  # what the hammer threads present as broker truth
 
+    # Production has exactly one enforce caller, and it runs strictly after
+    # lifecycle.sync in the same thread — reconcile can never interleave with
+    # a multi-write transition (position+order writes, cancel+sweep). What
+    # DOES race live is the steady state: an order resting for minutes, a
+    # close working through fill states, enforce firing every tick. tick_lock
+    # encodes exactly that: hammers and transitions exclude each other, but
+    # the steady-state sleeps leave the lock free and the hammers pounding.
+    tick_lock = threading.Lock()
+
     def hammer():
         hstore = Store(workdir / "races.db")
         haudit = AuditLog(workdir / "audit", role=f"races-{threading.current_thread().name}")
         try:
             while not stop.is_set():
                 try:
-                    r = enforce(hstore, haudit, list(broker_view))
+                    with tick_lock:
+                        r = enforce(hstore, haudit, list(broker_view))
                     if not r.ok:
                         halts.append(r.reason)
                 except Exception as e:  # noqa: BLE001 -- a raise here IS a finding
@@ -627,11 +637,12 @@ def scenario_lifecycle_races(ctx) -> None:
         coid = client_order_id(sid, key)
         ctx["coids"].add(coid)
         pid = f"pos-{sid}"
-        store.upsert_position(
-            pid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
-            qty=1, max_loss=380.0, status="opening",
-        )
-        router.submit_structure(structure, 1, RESTING_LIMIT, coid, pid)
+        with tick_lock:
+            store.upsert_position(
+                pid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+                qty=1, max_loss=380.0, status="opening",
+            )
+            router.submit_structure(structure, 1, RESTING_LIMIT, coid, pid)
         for t in threads:
             t.start()
         time.sleep(3)  # ~150 enforce passes across 8 threads while the order rests
@@ -642,8 +653,9 @@ def scenario_lifecycle_races(ctx) -> None:
 
         # -- 2. same-tick cancel vs the sweep (the orphan) -------------------
         row = store.get_order(coid)
-        router.cancel(coid, row["alpaca_order_id"])  # row flips canceled in-tick
-        events = lifecycle.sync(trader, datetime.now(UTC))
+        with tick_lock:  # cancel + sweep happen inside one production tick
+            router.cancel(coid, row["alpaca_order_id"])  # row flips canceled in-tick
+            events = lifecycle.sync(trader, datetime.now(UTC))
         prow = store.get_position(pid)
         f.bad(prow["status"] == "failed", "races", "sweep_resolves_cancel",
               "sweep failed the position the same tick its order died out-of-band",
@@ -659,14 +671,17 @@ def scenario_lifecycle_races(ctx) -> None:
         zsid = f"{sid}-zombie"
         zcoid = client_order_id(zsid, key)
         zpid = f"pos-{zsid}"
-        store.record_order(zcoid, "open", legs, RESTING_LIMIT, zpid)  # never submitted
-        store.upsert_position(
-            zpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
-            qty=1, max_loss=380.0, status="opening",
-        )
-        aged = datetime.now(UTC).timestamp() - (cfg.execution.entry_fill_timeout_minutes * 60 + 60)
-        store.update_order(zcoid, created_at=datetime.fromtimestamp(aged, UTC).isoformat())
-        events = lifecycle.sync(trader, datetime.now(UTC))  # broker 404s the poll
+        with tick_lock:
+            store.record_order(zcoid, "open", legs, RESTING_LIMIT, zpid)  # never submitted
+            store.upsert_position(
+                zpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+                qty=1, max_loss=380.0, status="opening",
+            )
+            aged = datetime.now(UTC).timestamp() - (
+                cfg.execution.entry_fill_timeout_minutes * 60 + 60
+            )
+            store.update_order(zcoid, created_at=datetime.fromtimestamp(aged, UTC).isoformat())
+            events = lifecycle.sync(trader, datetime.now(UTC))  # broker 404s the poll
         zrow = store.get_position(zpid)
         f.bad(zrow["status"] == "failed" and not store.orders_in_flight(),
               "races", "zombie_voided",
@@ -678,11 +693,12 @@ def scenario_lifecycle_races(ctx) -> None:
         # -- 4. the close-fill band, all four corners, still under fire ------
         cpid = f"pos-{sid}-close"
         ccoid = f"gbx-o-{sid}-close"
-        store.upsert_position(
-            cpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
-            qty=2, max_loss=380.0, status="closing",
-        )
-        store.record_order(ccoid, "close", legs, 0.50, cpid)
+        with tick_lock:
+            store.upsert_position(
+                cpid, underlying="SPY", kind="soak_races", legs_json=json.dumps(legs),
+                qty=2, max_loss=380.0, status="closing",
+            )
+            store.record_order(ccoid, "close", legs, 0.50, cpid)
 
         def broker_legs(fraction):
             out = []
@@ -703,8 +719,9 @@ def scenario_lifecycle_races(ctx) -> None:
 
         # ...and the band must still END somewhere: a dead close order with
         # the broker flat is a real divergence, not a tolerance.
-        store.update_order(ccoid, status="canceled")
-        broker_view[:] = []
+        with tick_lock:
+            store.update_order(ccoid, status="canceled")
+            broker_view[:] = []
         time.sleep(1)
         f.bad(any("local-only" in h for h in halts[pre:]), "races", "band_still_bounded",
               "dead close order + flat broker still halts (the band has edges)",
