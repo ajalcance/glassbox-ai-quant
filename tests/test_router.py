@@ -63,6 +63,29 @@ def test_duplicate_submission_is_suppressed(store, audit, bull_put):
     assert len(router.client.submitted) == 1, "duplicate order reached the broker"
 
 
+def test_poll_backfills_a_pending_row_the_broker_confirms(store, audit, bull_put):
+    """Crash after submit_order but before the status update: row 'pending',
+    no alpaca_order_id — yet the broker holds the order. The next poll must
+    heal the row, or a later cancel of this order can never work."""
+
+    class Confirms(FakeClient):
+        def get_order_by_client_id(self, coid):
+            o = FakeOrder("alp-77")
+            o.status = "new"
+            o.filled_avg_price = None
+            return o
+
+    router = OrderRouter(Confirms(), store, audit, breaker=CircuitBreaker(clock=lambda: 0.0))
+    coid = client_order_id("sig-1", structure_key(bull_put))
+    store.record_order(coid, "open", [], -1.20, "pos-1")  # crash state: pending
+
+    status, fill = router.poll(coid)
+    assert status == "new" and fill is None
+    row = store.get_order(coid)
+    assert row["status"] == "submitted"
+    assert row["alpaca_order_id"] == "alp-77"
+
+
 def test_intent_persisted_before_submission(store, audit, bull_put):
     """A crash mid-submit must still leave a reconcilable record."""
     router = make_router(store, audit, fail_times=1)

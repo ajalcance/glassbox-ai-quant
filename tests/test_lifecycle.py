@@ -110,6 +110,51 @@ def test_expired_entry_resolves_the_position_not_just_the_order(store, audit):
     assert reconcile(store, []).ok, "an orphaned entry must not poison reconcile"
 
 
+def test_unconfirmed_pending_order_is_voided_after_timeout(store, audit):
+    """Crash between record_order and submit: row 'pending', no
+    alpaca_order_id, broker never saw the coid so every poll raises. Without
+    the void this is an eternal zombie — poll errors every tick and a
+    position excused as 'arriving' forever."""
+    from glassbox.reconcile import reconcile
+
+    class BrokerNeverHeardOfIt(StubRouter):
+        def submit_structure(self, structure, qty, price, coid, position_id, closing=False):
+            result = super().submit_structure(structure, qty, price, coid, position_id, closing)
+            # regress the row to the crash state: recorded, never confirmed
+            self.store.update_order(coid, status="pending", alpaca_order_id=None)
+            return result
+
+        def poll(self, coid):
+            raise RuntimeError("404: order not found")
+
+    t, _, _ = open_via_pipeline(store, audit, router=BrokerNeverHeardOfIt(store))
+
+    assert lifecycle.sync(t, NOW) == []  # fresh: benign, retried
+
+    late = NOW + timedelta(minutes=t.cfg.execution.entry_fill_timeout_minutes + 1)
+    events = lifecycle.sync(t, late)
+    assert any("voided" in e for e in events), events
+    assert store.open_positions() == [], "zombie position must be failed"
+    assert store.orders_in_flight() == [], "zombie order must leave in-flight"
+    assert reconcile(store, []).ok
+
+
+def test_confirmed_order_is_not_voided_when_polls_fail(store, audit):
+    """API down is not 'the order does not exist': a row with an
+    alpaca_order_id stays in flight through poll failures, however old."""
+
+    class ApiDown(StubRouter):
+        def poll(self, coid):
+            raise RuntimeError("503: service unavailable")
+
+    t, _, _ = open_via_pipeline(store, audit, router=ApiDown(store))
+    late = NOW + timedelta(minutes=t.cfg.execution.entry_fill_timeout_minutes + 10)
+    events = lifecycle.sync(t, late)
+    assert not any("voided" in e for e in events), events
+    assert len(store.orders_in_flight()) == 1
+    assert store.open_positions()[0]["status"] == "opening"
+
+
 def test_orphaned_closing_position_is_reopened_by_the_sweep(store, audit):
     """Same orphan class on the exit side: a close order resolved out-of-band
     leaves 'closing', which manage_positions never walks. The sweep must hand

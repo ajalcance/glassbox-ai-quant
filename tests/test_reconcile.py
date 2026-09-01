@@ -137,6 +137,36 @@ def test_broker_only_still_halts_alongside_pending_entry(store, audit):
     assert "broker-only" in result.reason
 
 
+def test_closing_position_partially_filled_close_does_not_halt(store, audit):
+    """The entry-side band, mirrored on the exit: a working close rests for
+    minutes by design (escalation ladder), and a partial close fill across a
+    tick must not read as a qty mismatch."""
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="closing")
+    store.record_order("gbx-c-1", "close", [SHORT_PUT, LONG_PUT], 0.50, "pos-1")
+    broker = [FakeBrokerPos("SPY260918P00440000", -1), FakeBrokerPos("SPY260918P00435000", 1)]
+    result = enforce(store, audit, broker)
+    assert result.ok, result.reason
+
+
+def test_closing_position_fully_closed_at_broker_does_not_halt(store, audit):
+    """Close filled at the broker, our poll one tick behind: legs gone from
+    the broker while the row still says 'closing' is legal mid-flight."""
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="closing")
+    store.record_order("gbx-c-1", "close", [SHORT_PUT, LONG_PUT], 0.50, "pos-1")
+    result = enforce(store, audit, broker_positions=[])
+    assert result.ok, result.reason
+
+
+def test_closing_position_without_working_close_order_still_halts(store, audit):
+    """'closing' is excused only while a close order is actually working."""
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT], qty=2, status="closing")
+    store.record_order("gbx-c-1", "close", [SHORT_PUT, LONG_PUT], 0.50, "pos-1")
+    store.update_order("gbx-c-1", status="canceled")
+    result = enforce(store, audit, broker_positions=[])
+    assert not result.ok
+    assert "local-only" in result.reason
+
+
 def test_closed_positions_excluded_from_heat_and_reconcile(store, audit):
     add_position(store, "pos-old", [SHORT_PUT, LONG_PUT], status="closed")
     assert reconcile(store, []).ok

@@ -75,25 +75,45 @@ def reconcile(store, broker_positions) -> ReconcileResult:
     """
     in_flight_rows = store.orders_in_flight()
     pending_open_pids = {r["position_id"] for r in in_flight_rows if r["intent"] == "open"}
+    pending_close_pids = {r["position_id"] for r in in_flight_rows if r["intent"] == "close"}
 
-    settled_rows, pending_rows = [], []
+    settled_rows, arriving_rows, leaving_rows = [], [], []
     for row in store.open_positions():
         if row["status"] == "opening" and row["position_id"] in pending_open_pids:
-            pending_rows.append(row)
+            arriving_rows.append(row)  # legs may appear at the broker: 0 … full
         else:
             settled_rows.append(row)
+            if row["status"] == "closing" and row["position_id"] in pending_close_pids:
+                # A working close rests for minutes by design (the escalation
+                # ladder concedes price step by step). Its legs may vanish
+                # from the broker at any point: full … 0. Without this band a
+                # partial close fill across one tick is a qty mismatch — the
+                # 1 Sep entry-side bug mirrored on the exit, where a halt
+                # hurts most.
+                leaving_rows.append(row)
 
     settled = _leg_quantities(settled_rows)
-    pending = _leg_quantities(pending_rows)
+    arriving = _leg_quantities(arriving_rows)
+    leaving = _leg_quantities(leaving_rows)
     broker = _broker_leg_quantities(broker_positions)
 
-    local_only = tuple(sorted(set(settled) - set(broker)))
-    broker_only = tuple(sorted(set(broker) - set(settled) - set(pending)))
-    mismatch = []
-    for s in set(broker) & (set(settled) | set(pending)):
-        lo, hi = sorted((settled.get(s, 0), settled.get(s, 0) + pending.get(s, 0)))
-        if not lo <= broker[s] <= hi:
+    local_only, broker_only, mismatch = [], [], []
+    for s in set(settled) | set(arriving) | set(leaving) | set(broker):
+        base = settled.get(s, 0)
+        a, l, b = arriving.get(s, 0), leaving.get(s, 0), broker.get(s, 0)
+        # The broker may sit at any combination of "entry filled or not" and
+        # "close filled or not"; all four corners are legal mid-flight.
+        corners = (base, base + a, base - l, base + a - l)
+        if min(corners) <= b <= max(corners):
+            continue
+        if base == 0 and a == 0 and l == 0:
+            broker_only.append(s)  # the dangerous case: we have no record at all
+        elif b == 0:
+            local_only.append(s)
+        else:
             mismatch.append(s)
+    local_only = tuple(sorted(local_only))
+    broker_only = tuple(sorted(broker_only))
     mismatch = tuple(sorted(mismatch))
     in_flight = tuple(sorted(r["client_order_id"] for r in in_flight_rows))
 
@@ -104,7 +124,7 @@ def reconcile(store, broker_positions) -> ReconcileResult:
         broker_only=broker_only,
         qty_mismatch=mismatch,
         in_flight=in_flight,
-        detail={"local": settled, "pending": pending, "broker": broker},
+        detail={"local": settled, "arriving": arriving, "leaving": leaving, "broker": broker},
     )
 
 

@@ -48,6 +48,9 @@ def sync(trader, now: datetime) -> list[str]:
                 "lifecycle_poll_error",
                 {"client_order_id": order["client_order_id"], "error": f"{type(e).__name__}: {e}"},
             )
+            voided = _maybe_void_unconfirmed(trader, order, now)
+            if voided:
+                events.append(voided)
             continue
 
         if status == "filled":
@@ -60,6 +63,38 @@ def sync(trader, now: datetime) -> list[str]:
                 events.append(stale)
     events.extend(_sweep_orphans(trader, now))
     return [e for e in events if e]
+
+
+def _maybe_void_unconfirmed(trader, order, now: datetime) -> str:
+    """Resolve a 'pending' row whose submission was never confirmed.
+
+    A crash between record_order and the post-submit status update leaves a
+    row at 'pending' with no alpaca_order_id. If the broker never received
+    the order, every poll of it fails forever: the row never leaves
+    orders_in_flight, its position stays excused as 'arriving' indefinitely,
+    and nothing ever cleans either up — a silent zombie. (If the broker DID
+    receive it, poll succeeds and backfills the row instead — see
+    router.poll — so this path only fires when the broker lookup fails.)
+
+    After the entry timeout it is resolved as canceled; the sweep below then
+    fails the position. If the order somehow exists at the broker after all,
+    the next fill shows up as a broker-only divergence and reconcile halts —
+    the safe direction for a state we cannot confirm.
+    """
+    if order["alpaca_order_id"] is not None or order["status"] != "pending":
+        return ""
+    if _age_seconds(order, now) < trader.cfg.execution.entry_fill_timeout_minutes * 60:
+        return ""
+    trader.store.update_order(order["client_order_id"], status="canceled")
+    trader.audit.append(
+        "order_voided_unconfirmed",
+        {
+            "client_order_id": order["client_order_id"],
+            "age_seconds": round(_age_seconds(order, now)),
+            "note": "pending with no alpaca_order_id and broker lookup failing",
+        },
+    )
+    return f"voided unconfirmed order {order['client_order_id']}"
 
 
 def _sweep_orphans(trader, now: datetime) -> list[str]:

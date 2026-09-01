@@ -170,6 +170,19 @@ class OrderRouter:
         'new'/'accepted'/'partially_filled'.
         """
         order = self.breaker.call(lambda: self.client.get_order_by_client_id(client_order_id))
+        row = self.store.get_order(client_order_id)
+        if row is not None and row["status"] == "pending":
+            # The broker knows this order but our row never got past 'pending'
+            # — a crash landed between submit_order and the status update.
+            # Backfill what the update would have written; without the
+            # alpaca_order_id, a later cancel of this order can never work.
+            self.store.update_order(
+                client_order_id, status="submitted", alpaca_order_id=str(order.id)
+            )
+            self.audit.append(
+                "order_confirmed_late",
+                {"client_order_id": client_order_id, "alpaca_order_id": str(order.id)},
+            )
         status = str(order.status).split(".")[-1].lower()
         fill = order.filled_avg_price
         return status, (float(fill) if fill is not None else None)
