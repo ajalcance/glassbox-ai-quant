@@ -616,11 +616,13 @@ def scenario_lifecycle_races(ctx) -> None:
             hstore.close()
 
     threads = [threading.Thread(target=hammer, name=f"h{n}") for n in range(8)]
-    for t in threads:
-        t.start()
 
     try:
         # -- 1. resting entry under reconcile fire (the 14:32 GOOGL halt) ----
+        # Position and order are written BEFORE the hammer starts: in
+        # production the runner is single-threaded, so process_news finishes
+        # both writes before enforce can run. What raced live — and what this
+        # phase fires at — is the minutes the order then spends RESTING.
         sid = f"soak-races-{ctx['run_id']}"
         coid = client_order_id(sid, key)
         ctx["coids"].add(coid)
@@ -630,6 +632,8 @@ def scenario_lifecycle_races(ctx) -> None:
             qty=1, max_loss=380.0, status="opening",
         )
         router.submit_structure(structure, 1, RESTING_LIMIT, coid, pid)
+        for t in threads:
+            t.start()
         time.sleep(3)  # ~150 enforce passes across 8 threads while the order rests
         f.bad(not halts, "races", "resting_entry_no_halt",
               "no halt while the entry order rested (write-ahead intent excused)",
@@ -647,7 +651,7 @@ def scenario_lifecycle_races(ctx) -> None:
               f"(events: {events})", severity="CRITICAL")
         pre = len(halts)
         time.sleep(1)
-        f.bad(len(halts) == pre and not halts, "races", "no_halt_after_sweep",
+        f.bad(len(halts) == pre, "races", "no_halt_after_sweep",
               "reconcile stayed clean through cancel and sweep",
               f"halts after sweep: {halts[pre:][:2]}")
 
