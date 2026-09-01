@@ -78,6 +78,17 @@ execution:
   # and an order still resting after this long is a fill the market declined at
   # our price. It is cancelled and the position abandoned rather than chased.
   entry_fill_timeout_minutes: 4
+  # Bounded entry ladder (added 2 Sep, from 1 Sep's measured fill rate):
+  # closes escalate until filled (1/1 filled) while entries sat at their first
+  # price and died (3/7 — GOOGL, XOM, ORCL, CVX all expired untouched), with
+  # the router's PriceLadder built for exactly this and never wired. After
+  # each step_seconds resting, the entry concedes one tick — pay a cent more
+  # of debit, accept a cent less of credit — at most `steps` times, then the
+  # timeout above still kills it. Worst-case concession per spread is
+  # steps x tick x 100 = $2: a bounded crossing of quote noise, not a chase.
+  entry_ladder_steps: 2
+  entry_ladder_step_seconds: 80
+  entry_ladder_tick: 0.01
   # Close orders are the opposite — we are obligated to get out. An unfilled
   # close escalates: cancelled and resubmitted at a progressively worse price,
   # crossing further toward the market each attempt.

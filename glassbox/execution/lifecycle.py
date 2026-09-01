@@ -12,9 +12,13 @@ Responsibilities, run every tick:
   * Entry order filled      -> position becomes "open", entry price becomes the
                                actual fill, max loss is recomputed from it.
   * Entry order dead        -> position becomes "failed" (leaves heat).
-  * Entry order stale       -> cancelled. A news thesis is time-sensitive; an
-                               order the market declined at our price for
-                               minutes is not chased.
+  * Entry order stale       -> laddered, then cancelled. A resting entry
+                               concedes one tick at a time (at most
+                               entry_ladder_steps, a bounded crossing of
+                               quote noise, not a chase — added 2 Sep after
+                               1 Sep filled 3/7 entries); an order still
+                               unfilled at the timeout is abandoned. The
+                               budget runs from the position's birth.
   * Close order filled      -> position becomes "closed" with realized P&L from
                                the actual fill, and the learners are fed.
   * Close order stale       -> escalated: resubmitted at a progressively worse
@@ -233,8 +237,20 @@ def _maybe_expire(trader, order, now: datetime) -> str:
     age = _age_seconds(order, now)
 
     if order["intent"] == "open":
-        if age < cfg.entry_fill_timeout_minutes * 60:
-            return ""
+        # The thesis budget runs from the POSITION's birth, not the current
+        # order's: every ladder rung is a fresh order whose own age restarts,
+        # and gating on it would quietly stretch the 4-minute window.
+        row = trader.store.get_position(order["position_id"]) if order["position_id"] else None
+        total_age = age
+        if row is not None and row["opened_at"]:
+            total_age = (now - datetime.fromisoformat(row["opened_at"])).total_seconds()
+        if total_age < cfg.entry_fill_timeout_minutes * 60:
+            # Bounded ladder inside the budget: closes escalate until filled
+            # while entries sat at their first price and died (1 Sep: 3/7
+            # filled). Each elapsed step concedes one tick toward the market,
+            # at most entry_ladder_steps times; the timeout below still ends
+            # the attempt, so the chase is bounded at steps x tick.
+            return _escalate_entry(trader, order, total_age, row)
         try:
             trader.router.cancel(order["client_order_id"], order["alpaca_order_id"])
         except Exception as e:  # noqa: BLE001 -- if the cancel itself fails the
@@ -258,6 +274,62 @@ def _maybe_expire(trader, order, now: datetime) -> str:
     if age < cfg.close_retry_seconds:
         return ""
     return _escalate_close(trader, order)
+
+
+def _escalate_entry(trader, order, total_age: float, row) -> str:
+    """Concede one tick on a resting entry, a bounded number of times.
+
+    Mirrors _escalate_close's cancel-and-resubmit shape, but where a close is
+    an obligation that escalates until filled, an entry stays optional: at
+    most entry_ladder_steps concessions of entry_ladder_tick each, and the
+    entry timeout still abandons the attempt. In the signed price convention
+    a concession is +tick for both directions — a debit pays a cent more, a
+    credit accepts a cent less. A credit that would concede to zero stops
+    escalating instead (a zero limit is not an order).
+    """
+    from glassbox.execution.ids import client_order_id
+    from glassbox.structures import structure_key
+
+    cfg = trader.cfg.execution
+    position_id = order["position_id"]
+    if row is None:
+        return ""
+    attempt = int(trader.store.get_state(f"entry_attempt:{position_id}") or 0)
+    if attempt >= cfg.entry_ladder_steps:
+        return ""  # ladder exhausted; rest at the final price until timeout
+    if total_age < cfg.entry_ladder_step_seconds * (attempt + 1):
+        return ""  # not this step's turn yet
+
+    old_price = float(order["limit_price"] or 0.0)
+    new_price = round(old_price + cfg.entry_ladder_tick, 2)
+    if new_price == 0.0:
+        return ""  # a credit conceded to nothing; let the timeout handle it
+
+    try:
+        trader.router.cancel(order["client_order_id"], order["alpaca_order_id"])
+    except Exception as e:  # noqa: BLE001 -- cancel may race a fill; the next
+        # poll resolves whichever actually happened.
+        trader.audit.append(
+            "entry_cancel_race",
+            {"position_id": position_id, "error": f"{type(e).__name__}: {e}"},
+        )
+        return ""
+
+    structure = trader._structure_from_row(row)
+    attempt += 1
+    trader.store.set_state(f"entry_attempt:{position_id}", str(attempt))
+    coid = client_order_id(row["signal_id"], structure_key(structure), attempt)
+    trader.router.submit_structure(structure, int(row["qty"]), new_price, coid, position_id)
+    trader.audit.append(
+        "entry_escalated",
+        {
+            "position_id": position_id,
+            "attempt": attempt,
+            "old_price": old_price,
+            "new_price": new_price,
+        },
+    )
+    return f"entry ladder step {attempt}: {row['underlying']} at {new_price}"
 
 
 def _escalate_close(trader, order) -> str:

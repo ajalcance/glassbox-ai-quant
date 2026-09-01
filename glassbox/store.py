@@ -229,7 +229,7 @@ class Store:
         """Most recent order of the given intent for a position, any status."""
         cur = self._conn.execute(
             "SELECT * FROM orders WHERE position_id=? AND intent=?"
-            " ORDER BY created_at DESC LIMIT 1",
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (position_id, intent),
         )
         return cur.fetchone()

@@ -110,6 +110,54 @@ def test_expired_entry_resolves_the_position_not_just_the_order(store, audit):
     assert reconcile(store, []).ok, "an orphaned entry must not poison reconcile"
 
 
+class NeverFillsRouter(StubRouter):
+    def poll(self, coid):
+        return "accepted", None
+
+
+def test_entry_ladder_concedes_one_tick_per_step(store, audit):
+    """The bounded entry ladder (2 Sep): a resting entry concedes one tick at
+    each elapsed step instead of dying at its first price."""
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    first = store.latest_order_for(row["position_id"], "open")
+    step = t.cfg.execution.entry_ladder_step_seconds
+
+    events = lifecycle.sync(t, NOW + timedelta(seconds=step + 1))
+    assert any("ladder step 1" in e for e in events), events
+    assert router.cancelled, "the resting order must be cancelled first"
+    assert store.get_order(first["client_order_id"])["status"] == "canceled"
+    current = store.latest_order_for(row["position_id"], "open")
+    assert current["client_order_id"] != first["client_order_id"], "fresh coid per rung"
+    assert float(current["limit_price"]) == pytest.approx(
+        float(first["limit_price"]) + t.cfg.execution.entry_ladder_tick
+    )
+    assert store.get_position(row["position_id"])["status"] == "opening"
+
+    # step 2 at its own time; then the ladder is exhausted — no third rung
+    events = lifecycle.sync(t, NOW + timedelta(seconds=2 * step + 1))
+    assert any("ladder step 2" in e for e in events), events
+    events = lifecycle.sync(t, NOW + timedelta(seconds=2 * step + 30))
+    assert not any("ladder" in e for e in events), "ladder must be bounded"
+
+    # the thesis budget still ends the attempt, measured from the POSITION's
+    # birth — the rungs must not stretch the window
+    late = NOW + timedelta(minutes=t.cfg.execution.entry_fill_timeout_minutes, seconds=1)
+    events = lifecycle.sync(t, late)
+    assert any("expired" in e for e in events), events
+
+
+def test_entry_ladder_never_concedes_a_credit_to_zero(store, audit):
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    coid = store.latest_order_for(row["position_id"], "open")["client_order_id"]
+    store.update_order(coid, limit_price=-0.01)  # one tick from nothing
+
+    step = t.cfg.execution.entry_ladder_step_seconds
+    events = lifecycle.sync(t, NOW + timedelta(seconds=step + 1))
+    assert not any("ladder" in e for e in events), "a zero limit is not an order"
+
+
 def test_unconfirmed_pending_order_is_voided_after_timeout(store, audit):
     """Crash between record_order and submit: row 'pending', no
     alpaca_order_id, broker never saw the coid so every poll raises. Without
