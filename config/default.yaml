@@ -188,7 +188,15 @@ signal:
   # penalises buying it. Buying rich optionality is the expensive mistake, so
   # the debit ceiling is the tighter of the two.
   vrp_max_for_debit: 1.35
-  vrp_min_for_credit: 0.90
+  # Lowered 0.90 -> 0.72 on 1 Sep (contest day 2), a deliberate in-contest
+  # threshold change made on Albert's explicit instruction, logged openly in
+  # local/POST-SESSION-REVIEW.md. Rationale: proving an autonomous entry
+  # outranks P&L for the submission, and the measured day-2 flow clustered at
+  # VRP 0.78-0.81 against an effective floor of 0.94 (regime-shifted from
+  # 0.90) — every candidate missing by 0.13-0.16. 0.72 admits that cluster
+  # while still refusing the truly thin tail; every other gate check (defined
+  # risk, delta band, liquidity, sizing, blackouts) still applies unchanged.
+  vrp_min_for_credit: 0.72
   # An implausibly large edge is a data problem, not an opportunity - the same
   # reasoning that rejects a credit above the spread width.
   max_plausible_ratio: 5.0

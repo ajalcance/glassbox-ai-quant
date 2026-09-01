@@ -160,10 +160,11 @@ def test_gate_permits_long_convexity_into_a_release(store, audit):
 
 
 def test_stress_relaxes_the_credit_floor():
-    """VRP 0.80 is refused in a normal market but permitted in stress, where
-    premium is genuinely richer."""
-    normal = vrp_permits(EdgeVerdict.SHORT_PREMIUM, 0.80, CFG, vrp_shift=0.0)
-    stressed = vrp_permits(EdgeVerdict.SHORT_PREMIUM, 0.80, CFG, vrp_shift=0.15)
+    """A VRP just under the floor is refused in a normal market but permitted
+    in stress, where premium is genuinely richer. 0.65 sits between the floor
+    (0.72) and the fully-stressed floor (0.72 - 0.15)."""
+    normal = vrp_permits(EdgeVerdict.SHORT_PREMIUM, 0.65, CFG, vrp_shift=0.0)
+    stressed = vrp_permits(EdgeVerdict.SHORT_PREMIUM, 0.65, CFG, vrp_shift=0.15)
     assert not normal[0] and stressed[0]
 
 
