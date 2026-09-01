@@ -58,7 +58,39 @@ def sync(trader, now: datetime) -> list[str]:
             stale = _maybe_expire(trader, order, now)
             if stale:
                 events.append(stale)
+    events.extend(_sweep_orphans(trader, now))
     return [e for e in events if e]
+
+
+def _sweep_orphans(trader, now: datetime) -> list[str]:
+    """Resolve transitional positions whose order died out-of-band.
+
+    The in-flight loop above only sees orders still marked pending/submitted.
+    But router.cancel() flips the row to 'canceled' in the same tick it acts
+    (as does anything else that resolves an order outside a poll), so the next
+    sync never polls it and _on_fill/_on_dead never run. The position then
+    sits at 'opening'/'closing' forever, poisoning reconcile. Found live on
+    1 Sep: the contest's first entry was expired by _maybe_expire and its
+    position orphaned at 'opening', halting the system with no path back.
+
+    The sweep gives those positions the same resolution a poll would have:
+    the recorded order status decides, exactly as in the loop above.
+    """
+    events = []
+    in_flight_pids = {o["position_id"] for o in trader.store.orders_in_flight()}
+    for row in trader.store.open_positions():
+        status = row["status"]
+        if status not in ("opening", "closing") or row["position_id"] in in_flight_pids:
+            continue
+        intent = "open" if status == "opening" else "close"
+        order = trader.store.latest_order_for(row["position_id"], intent)
+        if order is None:
+            continue  # no order was ever recorded — reconcile's problem, not ours
+        if order["status"] == "filled":
+            events.append(_on_fill(trader, order, order["filled_price"], now))
+        elif order["status"] in ("canceled", "rejected", "expired"):
+            events.append(_on_dead(trader, order, order["status"]))
+    return events
 
 
 def _on_fill(trader, order, fill: float | None, now: datetime) -> str:

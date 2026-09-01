@@ -225,6 +225,15 @@ class Store:
         cur = self._conn.execute("SELECT * FROM orders WHERE status IN ('pending','submitted')")
         return cur.fetchall()
 
+    def latest_order_for(self, position_id: str, intent: str) -> sqlite3.Row | None:
+        """Most recent order of the given intent for a position, any status."""
+        cur = self._conn.execute(
+            "SELECT * FROM orders WHERE position_id=? AND intent=?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (position_id, intent),
+        )
+        return cur.fetchone()
+
     # ---- positions --------------------------------------------------------
     def upsert_position(self, position_id: str, **fields) -> None:
         existing = self._conn.execute(

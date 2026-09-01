@@ -152,6 +152,12 @@ class StubRouter:
 
     def cancel(self, client_order_id, alpaca_order_id):
         self.cancelled.append(client_order_id)
+        # Mirror the real router, which marks the row canceled in the same
+        # tick it acts (router.py). The stub's old silence here is what hid
+        # the 1 Sep orphan: the order left orders_in_flight before any test
+        # could watch the next sync fail to resolve its position.
+        if self.store is not None:
+            self.store.update_order(client_order_id, status="canceled")
 
 
 def make_trader(store, audit, *, llm=None, data=None, router=None):

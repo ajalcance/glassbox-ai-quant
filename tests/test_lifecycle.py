@@ -86,6 +86,45 @@ def test_stale_entry_is_cancelled_not_chased(store, audit):
     assert any("expired" in e for e in events)
 
 
+def test_expired_entry_resolves_the_position_not_just_the_order(store, audit):
+    """The 1 Sep live orphan. router.cancel marks the order canceled in the
+    same tick, so it leaves orders_in_flight before the next sync can poll it
+    — _on_dead never ran and the position sat at 'opening' forever, halting
+    reconcile with no path back. The sweep must give it the resolution the
+    poll would have."""
+    from glassbox.reconcile import reconcile
+
+    class NeverFills(StubRouter):
+        def poll(self, coid):
+            return "accepted", None
+
+    router = NeverFills(store)
+    t, _, _ = open_via_pipeline(store, audit, router=router)
+
+    late = NOW + timedelta(minutes=t.cfg.execution.entry_fill_timeout_minutes + 1)
+    events = lifecycle.sync(t, late)  # cancel + sweep in one pass
+    assert router.cancelled
+    assert any("canceled" in e for e in events), events
+    assert store.open_positions() == [], "position must not stay 'opening'"
+    assert store.total_heat() == 0
+    assert reconcile(store, []).ok, "an orphaned entry must not poison reconcile"
+
+
+def test_orphaned_closing_position_is_reopened_by_the_sweep(store, audit):
+    """Same orphan class on the exit side: a close order resolved out-of-band
+    leaves 'closing', which manage_positions never walks. The sweep must hand
+    it back to the manager."""
+    t, _router, row = open_via_pipeline(store, audit)
+    settle(t)  # entry fill
+    pid = row["position_id"]
+    store.record_order("gbx-o-close-1", "close", [], 0.5, pid)
+    store.update_order("gbx-o-close-1", status="canceled")  # died out-of-band
+    store.upsert_position(pid, status="closing")
+
+    lifecycle.sync(t, NOW + timedelta(minutes=1))
+    assert store.get_position(pid)["status"] == "open", "must return to the manager"
+
+
 # --- close fills -----------------------------------------------------------
 
 
