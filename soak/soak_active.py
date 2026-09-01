@@ -127,17 +127,33 @@ def cancel_soak_orders(client, coids: set[str], findings: Findings) -> None:
             client.cancel_order_by_id(o.id)
     if leftovers:
         print(f"  swept {len(leftovers)} resting soak order(s)")
-    still = []
-    for _ in range(10):  # cancels are async at the broker; give them a moment
-        still = [o for o in client.get_orders(GetOrdersRequest(status="open", limit=500))
-                 if o.client_order_id in coids]
-        if not still:
+    # An order the broker has accepted a cancel for is settling, not residue.
+    # PENDING_CANCEL is a normal intermediate state and can persist for minutes
+    # around the open, when the venue queues option cancels — counting it as
+    # residue produced a CRITICAL on 1 Sep for fourteen orders whose cancels had
+    # all been accepted. Only orders still genuinely working are residue.
+    settling_states = {"pending_cancel", "pending_replace"}
+
+    def outstanding():
+        live = client.get_orders(GetOrdersRequest(status="open", limit=500))
+        mine = [o for o in live if o.client_order_id in coids]
+        resting, settling = [], []
+        for o in mine:
+            state = str(o.status).split(".")[-1].lower()
+            (settling if state in settling_states else resting).append(o)
+        return resting, settling
+
+    resting, settling = [], []
+    for _ in range(15):  # cancels are async at the broker; give them a moment
+        resting, settling = outstanding()
+        if not resting and not settling:
             break
         time.sleep(2)
     findings.bad(
-        not still, "cleanup", "no_soak_residue",
-        "no soak orders left resting",
-        f"{len(still)} soak orders STILL OPEN — run `make drill-clean` and check the account",
+        not resting, "cleanup", "no_soak_residue",
+        "no soak orders left resting"
+        + (f" ({len(settling)} cancel(s) still settling at the broker)" if settling else ""),
+        f"{len(resting)} soak orders STILL WORKING — run `make drill-clean` and check the account",
         severity="CRITICAL",
     )
 
