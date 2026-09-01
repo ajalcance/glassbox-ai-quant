@@ -136,13 +136,19 @@ gate:
 
 manage:
   # Credit structures: bank half the premium rather than grinding the last of it
-  # out against accelerating gamma, and stop at twice the credit received.
+  # out against accelerating gamma, and stop at 1.5x the credit received.
+  # Stops tightened 1 Sep (2.0x -> 1.5x, 50% -> 40%, trigger 60 -> 50) on
+  # operator instruction, paired with the overnight-carry policy: positions
+  # are no longer dumped at the bell for calendar reasons, so the intraday
+  # stop is the layer that cuts losers early and decides what earns the right
+  # to carry. Both values sit inside standard defined-risk practice
+  # (credits managed at 1.5-2x, debits at 30-50%).
   credit_profit_take_pct: 50
-  stop_multiple_of_credit: 2.0
-  # Debit structures: take profit at a full double, cut at half the debit paid.
+  stop_multiple_of_credit: 1.5
+  # Debit structures: take profit at a full double, cut at 40% of the debit.
   debit_profit_take_pct: 100
-  debit_stop_pct: 50
-  breakeven_trigger_pct: 60      # tighten stop to entry at 60% of target
+  debit_stop_pct: 40
+  breakeven_trigger_pct: 50      # tighten stop to entry at 50% of target
   min_hours_to_expiry: 24
   # An entry thesis should have an expiry condition, not only an expiry date.
   # Contradiction: later news on a held symbol that reverses the view we opened

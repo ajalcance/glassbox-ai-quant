@@ -83,8 +83,9 @@ def test_credit_target_is_half_the_premium():
     assert profit_target(credit_view(), CFG) == pytest.approx(60.0)  # 50% of $120
 
 
-def test_credit_stop_is_twice_the_credit():
-    assert stop_level(credit_view(), CFG) == pytest.approx(-240.0)
+def test_credit_stop_is_one_and_a_half_times_the_credit():
+    # tightened 2.0x -> 1.5x on 1 Sep, paired with the overnight-carry policy
+    assert stop_level(credit_view(), CFG) == pytest.approx(-180.0)
 
 
 def test_stop_never_exceeds_defined_max_loss():
@@ -95,7 +96,7 @@ def test_stop_never_exceeds_defined_max_loss():
 
 def test_debit_target_and_stop():
     assert profit_target(debit_view(), CFG) == pytest.approx(200.0)  # +100% of debit
-    assert stop_level(debit_view(), CFG) == pytest.approx(-100.0)  # -50% of debit
+    assert stop_level(debit_view(), CFG) == pytest.approx(-80.0)  # -40% of debit
 
 
 # --- barriers -------------------------------------------------------------
@@ -117,13 +118,33 @@ def test_stop_barrier_closes_and_labels_loss():
     assert d.should_close and d.barrier is Barrier.STOP and d.label == 0
 
 
-def test_time_barrier_labels_by_actual_outcome():
-    """A thesis has a shelf life; the label follows the P&L, not the barrier."""
+def test_time_barrier_banks_winners_only():
+    """The bell banks winners; it never realises losers (1 Sep policy).
+
+    A thesis past its horizon in profit is banked. Past its horizon at a
+    loss it RIDES — the wing bounds the downside, and the stop, macro_risk,
+    expiry_risk and deadline barriers all still apply."""
     expired = OPENED + timedelta(hours=25)
     win = evaluate_position(credit_view(current_price=-1.00), CFG, expired)
     assert win.barrier is Barrier.TIME and win.label == 1
+
     lose = evaluate_position(credit_view(current_price=-1.50), CFG, expired)
-    assert lose.barrier is Barrier.TIME and lose.label == 0
+    assert lose.action is Action.HOLD, "an expired loser rides, bounded by the wing"
+    assert "riding" in lose.reason
+
+
+def test_expired_loser_still_stops_out():
+    """Riding a loss past the horizon is NOT riding it to max loss: the
+    tightened stop still cuts it."""
+    expired = OPENED + timedelta(hours=25)
+    d = evaluate_position(credit_view(current_price=-3.20), CFG, expired)
+    assert d.should_close and d.barrier is Barrier.STOP
+
+
+def test_expired_loser_still_bounded_by_deadline():
+    expired = OPENED + timedelta(hours=25)
+    d = evaluate_position(credit_view(current_price=-1.50), CFG, expired, deadline=OPENED)
+    assert d.should_close and d.barrier is Barrier.DEADLINE
 
 
 # --- break-even -----------------------------------------------------------

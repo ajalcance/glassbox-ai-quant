@@ -290,12 +290,22 @@ def evaluate_position(
             1,
         )
 
-    if now >= view.opened_at + timedelta(hours=view.horizon_hours):
+    horizon_elapsed = now >= view.opened_at + timedelta(hours=view.horizon_hours)
+    if horizon_elapsed and pnl > 0:
+        # The bell banks winners; it never realises losers. A thesis that has
+        # run its course in profit has nothing left to wait for. One that ran
+        # its course at a loss is NOT dumped for calendar reasons (changed
+        # 1 Sep on operator instruction): a defined-risk structure's downside
+        # is already capped by the wing, so it rides — bounded by the stop
+        # intraday, the wing overnight, macro_risk for credits, expiry_risk
+        # inside 24h, and the deadline flatten. Overnight carry of an
+        # unresolved thesis is a deliberate policy, not an accident.
         held = (now - view.opened_at).total_seconds() / 3600
         return ManageDecision(
             Action.CLOSE,
             Barrier.TIME,
-            f"horizon elapsed ({held:.0f}h >= {view.horizon_hours:.0f}h) at ${pnl:+,.0f}",
+            f"horizon elapsed ({held:.0f}h >= {view.horizon_hours:.0f}h) — "
+            f"banking ${pnl:+,.0f}",
             pnl,
             label,
         )
@@ -304,7 +314,8 @@ def evaluate_position(
         Action.HOLD,
         Barrier.NONE,
         f"${pnl:+,.0f} between stop ${stop:+,.0f} and target ${target:+,.0f}"
-        f"{'; break-even armed' if breakeven_armed else ''}",
+        f"{'; break-even armed' if breakeven_armed else ''}"
+        f"{'; horizon elapsed — riding a bounded loss' if horizon_elapsed else ''}",
         pnl,
         None,
     )

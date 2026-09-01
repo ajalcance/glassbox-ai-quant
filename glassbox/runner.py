@@ -283,10 +283,19 @@ class Runner:
         if is_halted(self.store):
             print(f"[{now_utc():%H:%M:%S}] HALTED — {self.store.get_state('halt_reason')}")
             return
-        for outcome in self.trader.manage_positions(now_utc(), self._deadline):
-            print(f"[{now_utc():%H:%M:%S}] CLOSE {outcome.reason[:110]}")
+        market = self.market_state()
+        # Manage only while the market is open: barriers act through close
+        # orders, which cannot fill against a closed book, and overnight quote
+        # snapshots would feed the view stale marks. Positions carried across
+        # sessions (deliberate, 1 Sep) are re-evaluated on the first open tick
+        # — a gap through the stop closes at the open, which is the earliest
+        # any system could act on it. Lifecycle sync and reconcile above still
+        # run around the clock; it is only barrier evaluation that sleeps.
+        if market.is_open:
+            for outcome in self.trader.manage_positions(now_utc(), self._deadline):
+                print(f"[{now_utc():%H:%M:%S}] CLOSE {outcome.reason[:110]}")
         try:
-            for outcome in self.trader.retry_deferred(self.market_state()):
+            for outcome in self.trader.retry_deferred(market):
                 marker = "TRADE" if outcome.traded else "retry"
                 print(f"[{now_utc():%H:%M:%S}] {marker} deferred: {outcome.reason[:100]}")
         except Exception as e:  # noqa: BLE001 -- a failed retry pass must not
