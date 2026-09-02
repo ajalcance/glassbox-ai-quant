@@ -79,6 +79,27 @@ def test_selection_falls_back_to_the_whole_chain_when_nothing_is_liquid():
     assert oi < CFG.gate.min_open_interest  # and the gate will say so
 
 
+def test_primary_leg_may_reach_further_than_a_wing_for_liquidity():
+    """A short strike two notches further out-of-the-money is a more
+    conservative statement of the same view (AAPL, 2 Sep: the liquid short
+    sat two notches from target). Beyond the configured reach the
+    geometrically right strike wins."""
+    reach = CFG.signal.strike_liquidity_tolerance_widths
+    assert reach >= 2, "the live case needs two notches"
+    # 95 and 90 illiquid: a liquid short exists two notches away at 85
+    s = build_structure(
+        StructureKind.BULL_PUT_SPREAD, chain(illiquid_strikes=(95, 90)), SPOT, 4.0, "XYZ", CFG
+    )[0]
+    assert s.legs[0].strike == pytest.approx(85.0)
+    _, oi = structure_liquidity(s, chain(illiquid_strikes=(95, 90)))
+    assert oi >= CFG.gate.min_open_interest
+    # three notches is beyond reach: fall back to the nearest strike, gate decides
+    s = build_structure(
+        StructureKind.BULL_PUT_SPREAD, chain(illiquid_strikes=(95, 90, 85)), SPOT, 4.0, "XYZ", CFG
+    )[0]
+    assert s.legs[0].strike == pytest.approx(95.0)
+
+
 def test_liquidity_may_move_a_leg_but_never_redesign_the_structure():
     """Live check, 2 Sep: AVGO's liquid puts had nothing near the intended
     wing and a pure liquid pick stretched a 2.5-wide spread to 45 points.

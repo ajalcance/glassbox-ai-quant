@@ -154,11 +154,15 @@ def _pick(liquid: list[ContractQuote], full: list[ContractQuote], target: float,
     Beyond `tolerance` the geometrically right strike wins and the gate
     judges its liquidity as before.
     """
+    geometric = nearest(full, target)
     if liquid:
         best = nearest(liquid, target)
-        if abs(best.strike - target) <= tolerance:
+        # measured from the strike geometry would have chosen — "N notches
+        # from where it would have been", not from a target that may fall
+        # between strikes
+        if abs(best.strike - geometric.strike) <= tolerance + 1e-9:
             return best
-    return nearest(full, target)
+    return geometric
 
 
 def _build_from(
@@ -188,9 +192,24 @@ def _build_from(
     def above(side, strike):
         return [c for c in side if c.strike > strike]
 
+    def at_or_below(side, strike):
+        return [c for c in side if c.strike <= strike + 1e-9]
+
+    def at_or_above(side, strike):
+        return [c for c in side if c.strike >= strike - 1e-9]
+
+    # The primary leg (the short of a credit, the long of a debit) may move
+    # further for liquidity than a wing may: a short strike two notches
+    # further out-of-the-money is a more conservative statement of the same
+    # view, while a wing two notches wider is a different trade. AAPL, 2 Sep
+    # live check: the liquid short sat two notches from target; one width of
+    # tolerance fell back to the illiquid strike and the gate vetoed anyway.
+    reach = cfg.signal.strike_liquidity_tolerance_widths
+
     if kind is StructureKind.BULL_PUT_SPREAD:
         width = _wing_width(all_puts, spot, wing_pct)
-        short = _pick(puts, all_puts, spot - move, width)
+        # a credit's short may only move further out-of-the-money for liquidity
+        short = _pick(at_or_below(puts, spot - move), all_puts, spot - move, width * reach)
         long_ = _pick(below(puts, short.strike), below(all_puts, short.strike),
                       short.strike - width, width)
         if long_.strike >= short.strike:
@@ -202,7 +221,7 @@ def _build_from(
 
     if kind is StructureKind.BEAR_CALL_SPREAD:
         width = _wing_width(all_calls, spot, wing_pct)
-        short = _pick(calls, all_calls, spot + move, width)
+        short = _pick(at_or_above(calls, spot + move), all_calls, spot + move, width * reach)
         long_ = _pick(above(calls, short.strike), above(all_calls, short.strike),
                       short.strike + width, width)
         if long_.strike <= short.strike:
@@ -214,8 +233,8 @@ def _build_from(
 
     if kind is StructureKind.IRON_CONDOR:
         pw, cw = _wing_width(all_puts, spot, wing_pct), _wing_width(all_calls, spot, wing_pct)
-        put_s = _pick(puts, all_puts, spot - move, pw)
-        call_s = _pick(calls, all_calls, spot + move, cw)
+        put_s = _pick(at_or_below(puts, spot - move), all_puts, spot - move, pw * reach)
+        call_s = _pick(at_or_above(calls, spot + move), all_calls, spot + move, cw * reach)
         put_l = _pick(below(puts, put_s.strike), below(all_puts, put_s.strike),
                       put_s.strike - pw, pw)
         call_l = _pick(above(calls, call_s.strike), above(all_calls, call_s.strike),
@@ -235,7 +254,7 @@ def _build_from(
 
     if kind is StructureKind.CALL_DEBIT_SPREAD:
         width = _wing_width(all_calls, spot, wing_pct)
-        long_ = _pick(calls, all_calls, spot, width)
+        long_ = _pick(calls, all_calls, spot, width * reach)
         short = _pick(above(calls, long_.strike), above(all_calls, long_.strike),
                       spot + move, width)
         if short.strike <= long_.strike:
@@ -247,7 +266,7 @@ def _build_from(
 
     if kind is StructureKind.PUT_DEBIT_SPREAD:
         width = _wing_width(all_puts, spot, wing_pct)
-        long_ = _pick(puts, all_puts, spot, width)
+        long_ = _pick(puts, all_puts, spot, width * reach)
         short = _pick(below(puts, long_.strike), below(all_puts, long_.strike),
                       spot - move, width)
         if short.strike >= long_.strike:

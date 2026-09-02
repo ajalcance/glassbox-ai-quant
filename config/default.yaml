@@ -276,6 +276,16 @@ signal:
   # near-zero forecast picks the same strike for both legs, which is not a
   # spread.
   min_move_pct_for_strikes: 0.5
+  # How far a PRIMARY leg (the short of a credit, the long of a debit) may
+  # move from its target strike, in wing widths, to land on a liquid
+  # contract. Wings get one width regardless: a short two notches further
+  # out-of-the-money is a more conservative statement of the same view; a
+  # wing two notches wider is a different trade. Live check 2 Sep: with one
+  # width, AAPL's liquid short (two notches out) was passed over for the
+  # illiquid strike and the gate vetoed anyway; AVGO's liquid wing 45
+  # points down would have redesigned the spread. Two widths for the
+  # primary leg converts the first without permitting the second.
+  strike_liquidity_tolerance_widths: 2.0
 
 regime:
   # Cross-asset risk read. Each factor is a percentile of today's value within

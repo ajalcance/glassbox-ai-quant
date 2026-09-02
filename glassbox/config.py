@@ -111,6 +111,7 @@ class SignalCfg(BaseModel):
     vrp_min_for_credit: float
     wing_width_pct: float
     min_move_pct_for_strikes: float
+    strike_liquidity_tolerance_widths: float
 
 
 class RegimeCfg(BaseModel):
