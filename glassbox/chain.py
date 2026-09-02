@@ -208,8 +208,10 @@ def _build_from(
 
     if kind is StructureKind.BULL_PUT_SPREAD:
         width = _wing_width(all_puts, spot, wing_pct)
-        # a credit's short may only move further out-of-the-money for liquidity
-        short = _pick(at_or_below(puts, spot - move), all_puts, spot - move, width * reach)
+        # a credit's short sits at or beyond the expected move, liquid or not —
+    # "sell beyond where we expect price to reach" applies to the fallback too
+        short = _pick(at_or_below(puts, spot - move), at_or_below(all_puts, spot - move),
+                      spot - move, width * reach)
         long_ = _pick(below(puts, short.strike), below(all_puts, short.strike),
                       short.strike - width, width)
         if long_.strike >= short.strike:
@@ -221,7 +223,8 @@ def _build_from(
 
     if kind is StructureKind.BEAR_CALL_SPREAD:
         width = _wing_width(all_calls, spot, wing_pct)
-        short = _pick(at_or_above(calls, spot + move), all_calls, spot + move, width * reach)
+        short = _pick(at_or_above(calls, spot + move), at_or_above(all_calls, spot + move),
+                      spot + move, width * reach)
         long_ = _pick(above(calls, short.strike), above(all_calls, short.strike),
                       short.strike + width, width)
         if long_.strike <= short.strike:
@@ -233,8 +236,10 @@ def _build_from(
 
     if kind is StructureKind.IRON_CONDOR:
         pw, cw = _wing_width(all_puts, spot, wing_pct), _wing_width(all_calls, spot, wing_pct)
-        put_s = _pick(at_or_below(puts, spot - move), all_puts, spot - move, pw * reach)
-        call_s = _pick(at_or_above(calls, spot + move), all_calls, spot + move, cw * reach)
+        put_s = _pick(at_or_below(puts, spot - move), at_or_below(all_puts, spot - move),
+                      spot - move, pw * reach)
+        call_s = _pick(at_or_above(calls, spot + move), at_or_above(all_calls, spot + move),
+                      spot + move, cw * reach)
         put_l = _pick(below(puts, put_s.strike), below(all_puts, put_s.strike),
                       put_s.strike - pw, pw)
         call_l = _pick(above(calls, call_s.strike), above(all_calls, call_s.strike),
