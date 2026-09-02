@@ -162,10 +162,25 @@ def main() -> int:
         from glassbox.structures import StructureKind
 
         current = data.structure_price(structure)
-        check(current <= _mid + 1e-9, "liquidation_marks",
-              f"mark {current:+.2f} <= mid {_mid:+.2f} (long legs at the bid, shorts at the ask)"
-              if current <= _mid + 1e-9 else
-              f"mark {current:+.2f} ABOVE mid {_mid:+.2f} — marks are not liquidation-side")
+        # Compare against the mid of the SAME quotes the mark was built from.
+        # The first run of this check (2 Sep 13:36) compared against the mid
+        # captured before the entry, four minutes earlier — and failed on
+        # drift, not on sides. Both reads below hit the same cached snapshot.
+        from glassbox.structures import LegSide
+
+        snaps = data._snapshots(structure.underlying, structure.expiry)
+        mid_now = 0.0
+        for leg in structure.legs:
+            q = snaps[leg.symbol].latest_quote
+            mid_now += ((float(q.bid_price) + float(q.ask_price)) / 2) * leg.ratio_qty * (
+                1 if leg.side is LegSide.LONG else -1
+            )
+        mid_now = round(mid_now, 2)
+        check(current <= mid_now + 1e-9, "liquidation_marks",
+              f"mark {current:+.2f} <= same-instant mid {mid_now:+.2f} "
+              f"(long legs at the bid, shorts at the ask)"
+              if current <= mid_now + 1e-9 else
+              f"mark {current:+.2f} ABOVE same-instant mid {mid_now:+.2f} — not liquidation-side")
 
         now_utc = datetime.now(UTC)
         expiry_dt = datetime(structure.expiry.year, structure.expiry.month,
