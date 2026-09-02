@@ -71,6 +71,7 @@ class Barrier(StrEnum):
     TIME = "time"
     BREAKEVEN = "breakeven"
     TRAIL = "trail"
+    BELL = "bell"
     DEADLINE = "deadline"
     EXPIRY_RISK = "expiry_risk"
     MACRO_RISK = "macro_risk"
@@ -162,6 +163,23 @@ class PositionView:
 
 
 @dataclass(frozen=True, slots=True)
+class BellContext:
+    """What the manager knows at the last ticks before the close.
+
+    Overnight, no barrier can act: the stop, trail and break-even are blind
+    from the bell to the next open, and the only protection is the wing. The
+    bell gate turns "carry" from a blanket rule into a conditional decision
+    with a known bound (2 Sep, after TLT gave back $187 of +$272 overnight).
+    """
+
+    at_bell: bool
+    weekday_et: int  # Monday = 0 … Friday = 4
+    equity: float
+    macro_before_open: object | None = None  # MacroWindow-like; active => release lands before the next tick
+    corporate_blocked: str = ""  # detail of a blocking corporate action before the next open
+
+
+@dataclass(frozen=True, slots=True)
 class ManageDecision:
     action: Action
     barrier: Barrier
@@ -194,12 +212,48 @@ def stop_level(view: PositionView, cfg) -> float:
     return -min(loss, view.max_loss_per_spread * view.qty)
 
 
+def _bell_reason(view: PositionView, cfg, pnl: float, stop: float, bell: BellContext) -> str:
+    """Why a position must not carry overnight, or '' if it may.
+
+    Checked in order of how little judgement each needs: the calendar, then
+    scheduled events, then the position's own shape. Winners past their
+    horizon are banked by TIME regardless; this decides the rest.
+    """
+    m = cfg.manage
+    if m.bell_no_weekend_carry and bell.weekday_et == 4:
+        return "no weekend carry — flat into Friday's close"
+    if (
+        bell.macro_before_open is not None
+        and getattr(bell.macro_before_open, "active", False)
+        and view.is_credit
+    ):
+        return f"short premium cannot carry into {bell.macro_before_open.detail}"
+    if bell.corporate_blocked:
+        return f"corporate action before the next open: {bell.corporate_blocked}"
+    if pnl >= 0:
+        return ""  # a winner carries (or TIME banks it); the shape checks are for losers
+    if stop < 0 and pnl <= stop * m.bell_near_stop_fraction:
+        return (
+            f"loser ${pnl:+,.0f} is past {m.bell_near_stop_fraction:.0%} of the way to its "
+            f"stop ${stop:+,.0f} — a gap would finish it overnight"
+        )
+    unprotected = view.max_loss_per_spread * view.qty - abs(stop)
+    cap = bell.equity * m.bell_max_unprotected_pct_equity / 100
+    if unprotected > cap:
+        return (
+            f"unprotected overnight gap ${unprotected:,.0f} (wing minus stop) exceeds "
+            f"${cap:,.0f} — {m.bell_max_unprotected_pct_equity}% of equity"
+        )
+    return ""
+
+
 def evaluate_position(
     view: PositionView,
     cfg,
     now: datetime,
     deadline: datetime | None = None,
     macro_window=None,
+    bell: BellContext | None = None,
 ) -> ManageDecision:
     """Decide whether to hold or close, and label the outcome if closing.
 
@@ -267,6 +321,14 @@ def evaluate_position(
             pnl,
             0,
         )
+
+    # The bell gate: at the last ticks before the close, may this position
+    # carry overnight? A stop outranks it (above); everything that would merely
+    # bank a winner comes after it, so a Friday or an event closes winners too.
+    if bell is not None and bell.at_bell:
+        why = _bell_reason(view, cfg, pnl, stop, bell)
+        if why:
+            return ManageDecision(Action.CLOSE, Barrier.BELL, f"bell gate: {why}", pnl, label)
 
     target = profit_target(view, cfg)
 

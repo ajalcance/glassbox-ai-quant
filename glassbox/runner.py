@@ -292,7 +292,7 @@ class Runner:
         # any system could act on it. Lifecycle sync and reconcile above still
         # run around the clock; it is only barrier evaluation that sleeps.
         if market.is_open:
-            for outcome in self.trader.manage_positions(now_utc(), self._deadline):
+            for outcome in self.trader.manage_positions(now_utc(), self._deadline, market):
                 print(f"[{now_utc():%H:%M:%S}] CLOSE {outcome.reason[:110]}")
         try:
             for outcome in self.trader.retry_deferred(market):

@@ -86,6 +86,9 @@ class ManageCfg(BaseModel):
     exit_on_thesis_complete: bool
     thesis_complete_fraction: float
     bell_buffer_minutes: float
+    bell_no_weekend_carry: bool
+    bell_near_stop_fraction: float
+    bell_max_unprotected_pct_equity: float
     flatten_all_at: str
 
 

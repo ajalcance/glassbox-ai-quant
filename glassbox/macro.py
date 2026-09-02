@@ -51,6 +51,39 @@ def _parse_events(cfg) -> list[tuple[datetime, str]]:
     return sorted(out)
 
 
+def next_session_open(now: datetime) -> datetime:
+    """09:30 ET on the next weekday after `now`. Holidays are a post-contest
+    concern; the contest week has none after Labor Day."""
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    local = now.astimezone(et)
+    day = local.date() + timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return datetime(day.year, day.month, day.day, 9, 30, tzinfo=et)
+
+
+def release_before_next_open(cfg, now: datetime) -> MacroWindow:
+    """A release landing between now and the next session's first tick.
+
+    The blackout window guards the front door during the session and is
+    blind at exactly the moment a carried position needs it: ADP printed
+    2 Sep at 08:15 ET, its window closed at 08:45, and the manager's first
+    tick came at 09:30 — a credit carried overnight sat straight through it.
+    This is what the bell gate asks before letting a credit carry.
+    """
+    after = timedelta(minutes=cfg.macro.blackout_after_minutes)
+    horizon = next_session_open(now) + after
+    for at, name in _parse_events(cfg):
+        if now < at <= horizon:
+            hours = (at - now).total_seconds() / 3600
+            return MacroWindow(
+                True, name, at, hours * 60, f"{name} in {hours:.1f}h, before the next open"
+            )
+    return MacroWindow(False)
+
+
 def current_window(cfg, now: datetime) -> MacroWindow:
     """Is `now` inside the blackout window of any configured release?"""
     before = timedelta(hours=cfg.macro.blackout_before_hours)

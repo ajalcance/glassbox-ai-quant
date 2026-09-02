@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 import pytest
 
 from glassbox.config import load_config
-from glassbox.macro import current_window
+from glassbox.macro import current_window, next_session_open, release_before_next_open
 from glassbox.regime import RegimeReading, compute, percentile_of_last, ratio_series
 from glassbox.signal.edge import EdgeVerdict, vrp_permits
 
@@ -183,3 +183,32 @@ def test_context_multiplier_shrinks_but_cannot_inflate():
     inflated = size_position(100_000, 100.0, 0.9, CFG, context_multiplier=5.0)
     assert half.qty <= full.qty
     assert inflated.qty == full.qty, "context can shrink conviction, never inflate it"
+
+
+# --- the bell gate's lookahead ------------------------------------------------
+
+
+def test_next_session_open_skips_the_weekend():
+    friday_close = datetime(2026, 9, 4, 19, 55, tzinfo=UTC)
+    nxt = next_session_open(friday_close)
+    assert nxt.weekday() == 0 and (nxt.hour, nxt.minute) == (9, 30)
+
+
+def test_release_before_next_open_sees_a_premarket_print_the_blackout_would_miss():
+    """ADP prints Wed 08:15 ET. At Tuesday's bell the current window is
+    inactive (it opens 06:15 Wed) — but the manager's first tick is 09:30
+    Wed, after the window has closed. The lookahead is what the bell gate
+    asks instead."""
+    cfg = load_config()
+    tuesday_bell = datetime(2026, 9, 1, 19, 55, tzinfo=UTC)
+    assert not current_window(cfg, tuesday_bell).active
+    ahead = release_before_next_open(cfg, tuesday_bell)
+    assert ahead.active and "ADP" in ahead.event_name
+
+
+def test_release_before_next_open_ignores_a_print_two_sessions_out():
+    cfg = load_config()
+    wednesday_bell = datetime(2026, 9, 2, 19, 55, tzinfo=UTC)  # NFP is Friday
+    assert not release_before_next_open(cfg, wednesday_bell).active
+    thursday_bell = datetime(2026, 9, 3, 19, 55, tzinfo=UTC)
+    assert release_before_next_open(cfg, thursday_bell).active

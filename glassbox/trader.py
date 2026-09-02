@@ -588,10 +588,17 @@ class Trader:
             closed.append(position.position_id)
         return closed
 
-    def manage_positions(self, now: datetime, deadline: datetime | None = None) -> list[Outcome]:
+    def manage_positions(
+        self, now: datetime, deadline: datetime | None = None, market=None
+    ) -> list[Outcome]:
         """Walk every open position through the triple barrier."""
         outcomes = []
         macro_window = self.macro_window()
+        at_bell = (
+            market is not None
+            and market.is_open
+            and market.minutes_to_close <= self.cfg.manage.bell_buffer_minutes
+        )
         for row in self.store.open_positions():
             if row["status"] != "open":
                 continue
@@ -606,7 +613,8 @@ class Trader:
 
             peak = self.store.record_peak_pnl(row["position_id"], view.unrealized_pnl)
             view = self._with_peak(view, peak)
-            decision = evaluate_position(view, self.cfg, now, deadline, macro_window)
+            bell = self._bell_context(row, now, market) if at_bell else None
+            decision = evaluate_position(view, self.cfg, now, deadline, macro_window, bell)
             self.audit.append(
                 "manage",
                 {
@@ -616,12 +624,44 @@ class Trader:
                     "reason": decision.reason,
                     "unrealized_pnl": decision.unrealized_pnl,
                     "label": decision.label,
+                    "at_bell": at_bell,
                 },
             )
             if decision.action is Action.CLOSE:
                 self._close(row, view, decision, now)
                 outcomes.append(Outcome("manage", False, decision.reason, view.position_id))
         return outcomes
+
+    def _bell_context(self, row, now: datetime, market):
+        """What the bell gate needs to decide whether this position may carry."""
+        from zoneinfo import ZoneInfo
+
+        from glassbox import macro as macro_module
+        from glassbox.manage import BellContext
+
+        weekday = now.astimezone(ZoneInfo("America/New_York")).weekday()
+        try:
+            release = macro_module.release_before_next_open(self.cfg, now)
+        except Exception:  # noqa: BLE001 -- a malformed calendar must not stop the gate
+            release = None
+        blocked = ""
+        try:
+            structure = self._structure_from_row(row)
+            hours_to_next_open = (
+                macro_module.next_session_open(now) - now
+            ).total_seconds() / 3600 + 1
+            result = self.corporate_blackout(row["underlying"], structure, hours_to_next_open)
+            if result is not None and getattr(result, "blocked", False):
+                blocked = result.detail
+        except Exception:  # noqa: BLE001 -- an unavailable feed leaves this check unperformed
+            blocked = ""
+        return BellContext(
+            at_bell=True,
+            weekday_et=weekday,
+            equity=float(market.equity),
+            macro_before_open=release,
+            corporate_blocked=blocked,
+        )
 
     def heartbeat(self) -> None:
         """The supervisor flattens the book if this stops advancing."""

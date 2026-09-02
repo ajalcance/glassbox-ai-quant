@@ -248,6 +248,72 @@ def test_every_close_produces_a_label():
         assert d.should_close and d.label in (0, 1), f"unlabelled close: {d.barrier}"
 
 
+# --- the bell gate --------------------------------------------------------
+
+
+def bell(**kw):
+    from glassbox.manage import BellContext
+
+    base = {"at_bell": True, "weekday_et": 2, "equity": 100_000.0}
+    base.update(kw)
+    return BellContext(**base)
+
+
+def test_bell_gate_is_silent_away_from_the_bell():
+    d = evaluate_position(credit_view(current_price=-1.50), CFG, LATER, bell=bell(at_bell=False))
+    assert d.action is Action.HOLD
+
+
+def test_bell_closes_everything_on_friday_winners_included():
+    """No position carries a weekend."""
+    d = evaluate_position(credit_view(current_price=-1.00), CFG, LATER, bell=bell(weekday_et=4))
+    assert d.should_close and d.barrier is Barrier.BELL and "weekend" in d.reason
+    assert d.label == 1, "label still follows the P&L"
+
+
+def test_bell_closes_short_premium_into_a_premarket_release_but_lets_long_vol_carry():
+    release = FakeMacroWindow(detail="ADP Employment in 16.3h, before the next open")
+    credit = evaluate_position(
+        credit_view(current_price=-1.30), CFG, LATER, bell=bell(macro_before_open=release)
+    )
+    assert credit.barrier is Barrier.BELL and "ADP" in credit.reason
+    debit = evaluate_position(
+        debit_view(current_price=1.90), CFG, LATER, bell=bell(macro_before_open=release)
+    )
+    assert debit.action is Action.HOLD, "a print is what long vol wants"
+
+
+def test_bell_closes_on_a_blocking_corporate_action():
+    d = evaluate_position(
+        credit_view(current_price=-1.10), CFG, LATER,
+        bell=bell(corporate_blocked="dividend 2026-09-03 blocks a credit structure"),
+    )
+    assert d.barrier is Barrier.BELL and "corporate" in d.reason
+
+
+def test_bell_closes_a_loser_most_of_the_way_to_its_stop():
+    # credit stop is -$180 (1.5x $120); -$100 is 56% of the way
+    d = evaluate_position(credit_view(current_price=-2.20), CFG, LATER, bell=bell())
+    assert d.should_close and d.barrier is Barrier.BELL and "stop" in d.reason
+
+
+def test_bell_closes_a_loser_with_a_wide_unprotected_gap():
+    # debit: stop -$80 (40% of $200), wing $200 -> $120 unprotected; cap 0.25% of $20k = $50
+    d = evaluate_position(debit_view(current_price=1.90), CFG, LATER, bell=bell(equity=20_000.0))
+    assert d.should_close and d.barrier is Barrier.BELL and "unprotected" in d.reason
+
+
+def test_bell_lets_a_small_loser_with_a_tight_wing_carry():
+    # credit at -$10: 6% of the way to the stop; unprotected $380 - $180 = $200 < $250 cap
+    d = evaluate_position(credit_view(current_price=-1.30), CFG, LATER, bell=bell())
+    assert d.action is Action.HOLD, d.reason
+
+
+def test_bell_never_outranks_a_real_stop():
+    d = evaluate_position(credit_view(current_price=-3.20), CFG, LATER, bell=bell(weekday_et=4))
+    assert d.barrier is Barrier.STOP
+
+
 # --- macro exit -----------------------------------------------------------
 
 

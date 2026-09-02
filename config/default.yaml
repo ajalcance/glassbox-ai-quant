@@ -189,6 +189,25 @@ manage:
   # by accident, not by policy. Five minutes matches the deadline flatten's
   # own margin before the close.
   bell_buffer_minutes: 5
+  # The bell gate (2 Sep): inside the buffer above, may a position carry
+  # overnight? No barrier can act from the bell to the next open — the only
+  # protection is the wing — so "carry" is a conditional decision, not a
+  # blanket rule. TLT gave back $187 of +$272 in that window on 1 Sep.
+  #   1. Friday: everything closes. No position carries a weekend.
+  #   2. A scheduled release before the next open closes short premium (the
+  #      blackout window is blind premarket: ADP printed 08:15, its window
+  #      ended 08:45, the first tick came 09:30). Long vol may carry — a
+  #      print is what it wants. A blocking corporate action closes either.
+  #   3. A LOSER past this fraction of the way to its stop closes — a gap
+  #      would finish it overnight; take the small loss while it is small.
+  #   4. A LOSER whose unprotected gap (wing minus stop) exceeds this share
+  #      of equity closes — the overnight exposure is out of proportion to
+  #      the risk the sizer intended. TLT's gap was $235; TSLA's $25.
+  # Winners past their horizon are banked by TIME regardless; a small loser
+  # with a tight wing carries, bounded.
+  bell_no_weekend_carry: true
+  bell_near_stop_fraction: 0.5
+  bell_max_unprotected_pct_equity: 0.25
   flatten_all_at: "2026-09-03T15:55:00-04:00"   # Thu before close, ET
 
 signal:

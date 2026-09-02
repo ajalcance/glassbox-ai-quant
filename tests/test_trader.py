@@ -990,3 +990,17 @@ def test_position_records_its_thesis(store, audit):
     assert row["thesis_direction"] == "up"
     assert float(row["thesis_move_pct"]) == pytest.approx(4.0)
     assert float(row["entry_spot"]) == pytest.approx(SPOT)
+
+
+def test_bell_context_is_built_from_the_session_and_the_calendar(store, audit):
+    """The manager only asks the bell gate inside the buffer, and what it
+    hands over comes from the clock and the calendar, not from guesses."""
+    t = make_trader(store, audit)
+    outcome = t.process_news(news(), market(minutes_to_close=180))
+    assert outcome.traded, outcome.reason
+    row = store.open_positions()[0]
+    ctx = t._bell_context(row, NOW, market(minutes_to_close=3))
+    assert ctx.at_bell
+    assert ctx.weekday_et == 1, "NOW is Tuesday 1 Sep 2026 in New York"
+    assert ctx.equity == market(minutes_to_close=3).equity
+    assert ctx.macro_before_open is not None
