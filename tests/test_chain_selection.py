@@ -79,13 +79,19 @@ def test_selection_falls_back_to_the_whole_chain_when_nothing_is_liquid():
     assert oi < CFG.gate.min_open_interest  # and the gate will say so
 
 
-def test_selection_falls_back_when_the_liquid_subset_cannot_express_the_view():
-    """Liquid strikes exist but none can serve as the wing: use the full
-    chain rather than skip a signal the gate might still accept."""
-    # everything below 95 is illiquid, so no liquid long wing exists
-    below = tuple(range(60, 95, 5))
+def test_liquidity_may_move_a_leg_but_never_redesign_the_structure():
+    """Live check, 2 Sep: AVGO's liquid puts had nothing near the intended
+    wing and a pure liquid pick stretched a 2.5-wide spread to 45 points.
+    Beyond one intended width the geometrically right strike wins and the
+    gate judges its liquidity — the shape of the trade is not negotiable."""
+    # everything below 95 is illiquid except a lone liquid strike far away
+    illiquid = tuple(k for k in range(60, 95, 5) if k != 60)
+    reference = build_structure(StructureKind.BULL_PUT_SPREAD, chain(), SPOT, 4.0, "XYZ", CFG)[0]
+    intended_width = reference.legs[0].strike - reference.legs[1].strike
     s = build_structure(
-        StructureKind.BULL_PUT_SPREAD, chain(illiquid_strikes=below), SPOT, 4.0, "XYZ", CFG
+        StructureKind.BULL_PUT_SPREAD, chain(illiquid_strikes=illiquid), SPOT, 4.0, "XYZ", CFG
     )[0]
-    assert s.legs[1].strike < s.legs[0].strike
-    assert pytest.approx(s.legs[0].strike) == 95.0
+    assert s.legs[0].strike == pytest.approx(95.0)
+    width = s.legs[0].strike - s.legs[1].strike
+    assert width <= 2 * intended_width, f"wing stretched to {width} (intended {intended_width})"
+    assert s.legs[1].strike != 60.0, "the far liquid strike must not be chosen as the wing"

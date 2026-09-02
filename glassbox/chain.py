@@ -127,21 +127,14 @@ def build_structure(
     # liquid strike exists the full side is used and the gate refuses as
     # before. Selection merely stops handing it candidates that cannot pass.
     calls, puts = _liquid(all_calls, cfg), _liquid(all_puts, cfg)
-    try:
-        return _build_from(kind, calls, puts, spot, expected_move_pct, underlying, cfg, wing_pct)
-    except NoSuitableStrikesError:
-        if calls is all_calls and puts is all_puts:
-            raise
-        # The liquid subset cannot express the view (e.g. no liquid wing);
-        # fall back to the whole chain and let the gate judge the result.
-        return _build_from(
-            kind, all_calls, all_puts, spot, expected_move_pct, underlying, cfg, wing_pct
-        )
+    return _build_from(
+        kind, calls, puts, all_calls, all_puts, spot, expected_move_pct, underlying, cfg, wing_pct
+    )
 
 
 def _liquid(side: list[ContractQuote], cfg) -> list[ContractQuote]:
     """Strikes that clear the gate's own liquidity floor, or the whole side
-    if none do — returning the same list object signals 'no filtering'."""
+    if none do."""
     liquid = [
         c
         for c in side
@@ -151,10 +144,29 @@ def _liquid(side: list[ContractQuote], cfg) -> list[ContractQuote]:
     return liquid if liquid else side
 
 
+def _pick(liquid: list[ContractQuote], full: list[ContractQuote], target: float, tolerance: float):
+    """The strike nearest `target`, preferring liquid ones — but never so far
+    from target that the structure's shape changes.
+
+    Live check on 2 Sep: AVGO's liquid puts had nothing near the intended
+    wing, and a pure liquid pick stretched a 2.5-wide spread to 45 points.
+    Liquidity may move a leg one notch; it may not redesign the structure.
+    Beyond `tolerance` the geometrically right strike wins and the gate
+    judges its liquidity as before.
+    """
+    if liquid:
+        best = nearest(liquid, target)
+        if abs(best.strike - target) <= tolerance:
+            return best
+    return nearest(full, target)
+
+
 def _build_from(
     kind: StructureKind,
     calls: list[ContractQuote],
     puts: list[ContractQuote],
+    all_calls: list[ContractQuote],
+    all_puts: list[ContractQuote],
     spot: float,
     expected_move_pct: float,
     underlying: str,
@@ -170,10 +182,17 @@ def _build_from(
         assert_defined_risk(structure)
         return structure, round(net, 2)
 
+    def below(side, strike):
+        return [c for c in side if c.strike < strike]
+
+    def above(side, strike):
+        return [c for c in side if c.strike > strike]
+
     if kind is StructureKind.BULL_PUT_SPREAD:
-        short = nearest(puts, spot - move)
-        width = _wing_width(puts, spot, wing_pct)
-        long_ = nearest([p for p in puts if p.strike < short.strike], short.strike - width)
+        width = _wing_width(all_puts, spot, wing_pct)
+        short = _pick(puts, all_puts, spot - move, width)
+        long_ = _pick(below(puts, short.strike), below(all_puts, short.strike),
+                      short.strike - width, width)
         if long_.strike >= short.strike:
             raise NoSuitableStrikesError("no put strike below the short leg")
         return build(
@@ -182,9 +201,10 @@ def _build_from(
         )
 
     if kind is StructureKind.BEAR_CALL_SPREAD:
-        short = nearest(calls, spot + move)
-        width = _wing_width(calls, spot, wing_pct)
-        long_ = nearest([c for c in calls if c.strike > short.strike], short.strike + width)
+        width = _wing_width(all_calls, spot, wing_pct)
+        short = _pick(calls, all_calls, spot + move, width)
+        long_ = _pick(above(calls, short.strike), above(all_calls, short.strike),
+                      short.strike + width, width)
         if long_.strike <= short.strike:
             raise NoSuitableStrikesError("no call strike above the short leg")
         return build(
@@ -193,10 +213,13 @@ def _build_from(
         )
 
     if kind is StructureKind.IRON_CONDOR:
-        put_s, call_s = nearest(puts, spot - move), nearest(calls, spot + move)
-        pw, cw = _wing_width(puts, spot, wing_pct), _wing_width(calls, spot, wing_pct)
-        put_l = nearest([p for p in puts if p.strike < put_s.strike], put_s.strike - pw)
-        call_l = nearest([c for c in calls if c.strike > call_s.strike], call_s.strike + cw)
+        pw, cw = _wing_width(all_puts, spot, wing_pct), _wing_width(all_calls, spot, wing_pct)
+        put_s = _pick(puts, all_puts, spot - move, pw)
+        call_s = _pick(calls, all_calls, spot + move, cw)
+        put_l = _pick(below(puts, put_s.strike), below(all_puts, put_s.strike),
+                      put_s.strike - pw, pw)
+        call_l = _pick(above(calls, call_s.strike), above(all_calls, call_s.strike),
+                       call_s.strike + cw, cw)
         if put_l.strike >= put_s.strike or call_l.strike <= call_s.strike:
             raise NoSuitableStrikesError("chain too narrow for a condor")
         credit = (put_s.mid - put_l.mid) + (call_s.mid - call_l.mid)
@@ -211,8 +234,10 @@ def _build_from(
         )
 
     if kind is StructureKind.CALL_DEBIT_SPREAD:
-        long_ = nearest(calls, spot)
-        short = nearest([c for c in calls if c.strike > long_.strike], spot + move)
+        width = _wing_width(all_calls, spot, wing_pct)
+        long_ = _pick(calls, all_calls, spot, width)
+        short = _pick(above(calls, long_.strike), above(all_calls, long_.strike),
+                      spot + move, width)
         if short.strike <= long_.strike:
             raise NoSuitableStrikesError("no call strike above the long leg")
         return build(
@@ -221,8 +246,10 @@ def _build_from(
         )
 
     if kind is StructureKind.PUT_DEBIT_SPREAD:
-        long_ = nearest(puts, spot)
-        short = nearest([p for p in puts if p.strike < long_.strike], spot - move)
+        width = _wing_width(all_puts, spot, wing_pct)
+        long_ = _pick(puts, all_puts, spot, width)
+        short = _pick(below(puts, long_.strike), below(all_puts, long_.strike),
+                      spot - move, width)
         if short.strike >= long_.strike:
             raise NoSuitableStrikesError("no put strike below the long leg")
         return build(
@@ -231,8 +258,9 @@ def _build_from(
         )
 
     if kind is StructureKind.LONG_STRANGLE:
-        call = nearest([c for c in calls if c.strike > spot], spot + move)
-        put = nearest([p for p in puts if p.strike < spot], spot - move)
+        width = _wing_width(all_calls, spot, wing_pct)
+        call = _pick(above(calls, spot), above(all_calls, spot), spot + move, width)
+        put = _pick(below(puts, spot), below(all_puts, spot), spot - move, width)
         # Long both sides: defined-risk because the debit is the whole exposure,
         # but assert_defined_risk needs a covering leg per right, so a strangle
         # is only permitted as two longs.
