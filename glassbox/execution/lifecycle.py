@@ -27,6 +27,7 @@ Responsibilities, run every tick:
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from glassbox.manage import Barrier
@@ -301,7 +302,23 @@ def _escalate_entry(trader, order, total_age: float, row) -> str:
         return ""  # not this step's turn yet
 
     old_price = float(order["limit_price"] or 0.0)
-    new_price = round(old_price + cfg.entry_ladder_tick, 2)
+    # Concession is measured from the ORIGINAL entry price, not the rung.
+    origin = float(row["entry_price"]) if row["entry_price"] is not None else old_price
+    # A rung concedes the larger of one tick and a fraction of the quoted
+    # spread: a flat cent is meaningless against a 30% quote (UBER, 2 Sep).
+    try:
+        spread_pct = float(json.loads(row["features_json"] or "{}").get("spread_pct_of_mid") or 0.0)
+    except (TypeError, ValueError):
+        spread_pct = 0.0
+    quoted_spread = abs(origin) * spread_pct / 100
+    step = max(cfg.entry_ladder_tick, round(quoted_spread * cfg.entry_ladder_spread_fraction, 2))
+    cap = abs(origin) * cfg.entry_ladder_max_concession_pct / 100
+    conceded_so_far = old_price - origin
+    if conceded_so_far + step > cap + 1e-9:
+        step = round(cap - conceded_so_far, 2)
+        if step < cfg.entry_ladder_tick:
+            return ""  # the proportional budget is spent; rest until timeout
+    new_price = round(old_price + step, 2)
     if new_price == 0.0:
         return ""  # a credit conceded to nothing; let the timeout handle it
 

@@ -1004,3 +1004,23 @@ def test_bell_context_is_built_from_the_session_and_the_calendar(store, audit):
     assert ctx.weekday_et == 1, "NOW is Tuesday 1 Sep 2026 in New York"
     assert ctx.equity == market(minutes_to_close=3).equity
     assert ctx.macro_before_open is not None
+
+
+def test_liquidity_is_judged_on_a_rolling_median_not_a_snapshot(store, audit):
+    """UBER, 2 Sep: 30.8% at 13:38, under 20% at 13:49 and 15:55, unfillable
+    at all three. With enough observations the gate sees the median; with
+    fewer, the snapshot as before."""
+    t = make_trader(store, audit)
+    from glassbox.chain import build_structure
+
+    wide = make_chain(spread=0.60)  # very wide quotes
+    tight = make_chain(spread=0.02)
+    structure, _ = build_structure(
+        __import__("glassbox.structures", fromlist=["x"]).StructureKind.BULL_PUT_SPREAD,
+        tight, SPOT, 4.0, "AAPL", CFG,
+    )
+    snap_tight = t._windowed_spread(structure, tight, 1.0)
+    assert snap_tight < 5.0  # one observation: the snapshot
+    t._windowed_spread(structure, tight, 1.0)
+    windowed = t._windowed_spread(structure, wide, 50.0)  # third observation, a wide one
+    assert windowed < 5.0, "median of (tight, tight, wide) is tight — the spike is noise"

@@ -118,7 +118,49 @@ def build_structure(
 
         cfg = load_config()
     wing_pct = cfg.signal.wing_width_pct
-    calls, puts = _side(chain, Right.CALL), _side(chain, Right.PUT)
+    all_calls, all_puts = _side(chain, Right.CALL), _side(chain, Right.PUT)
+    # Choose among strikes the gate could actually accept. nearest() picked
+    # purely by distance while open_interest and spread sat unused on the
+    # very quotes it chose from — so on 2 Sep it landed on AVGO at OI 4 and
+    # MU at OI 37 inside the most liquid names in the market, and 17 of 20
+    # gate arrivals died on liquidity. The gate keeps the final word: if no
+    # liquid strike exists the full side is used and the gate refuses as
+    # before. Selection merely stops handing it candidates that cannot pass.
+    calls, puts = _liquid(all_calls, cfg), _liquid(all_puts, cfg)
+    try:
+        return _build_from(kind, calls, puts, spot, expected_move_pct, underlying, cfg, wing_pct)
+    except NoSuitableStrikesError:
+        if calls is all_calls and puts is all_puts:
+            raise
+        # The liquid subset cannot express the view (e.g. no liquid wing);
+        # fall back to the whole chain and let the gate judge the result.
+        return _build_from(
+            kind, all_calls, all_puts, spot, expected_move_pct, underlying, cfg, wing_pct
+        )
+
+
+def _liquid(side: list[ContractQuote], cfg) -> list[ContractQuote]:
+    """Strikes that clear the gate's own liquidity floor, or the whole side
+    if none do — returning the same list object signals 'no filtering'."""
+    liquid = [
+        c
+        for c in side
+        if c.open_interest >= cfg.gate.min_open_interest
+        and c.spread_pct_of_mid <= cfg.gate.max_spread_pct_of_mid
+    ]
+    return liquid if liquid else side
+
+
+def _build_from(
+    kind: StructureKind,
+    calls: list[ContractQuote],
+    puts: list[ContractQuote],
+    spot: float,
+    expected_move_pct: float,
+    underlying: str,
+    cfg,
+    wing_pct: float,
+) -> tuple[Structure, float]:
     # Floor the move so a near-zero forecast cannot pick the same strike twice,
     # which is not a spread.
     move = spot * max(expected_move_pct, cfg.signal.min_move_pct_for_strikes) / 100

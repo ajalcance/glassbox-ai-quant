@@ -89,6 +89,14 @@ execution:
   entry_ladder_steps: 2
   entry_ladder_step_seconds: 80
   entry_ladder_tick: 0.01
+  # Each rung concedes the larger of the tick above and this fraction of the
+  # structure's quoted spread — a flat cent was measured meaningless against
+  # wide quotes (UBER: two cents on a 30% spread, twice, no fill; every fill
+  # of the week came inside 60s on a narrow quote). Total concession across
+  # all rungs is capped at this share of the entry price, so a wide quote is
+  # crossed proportionally, never chased.
+  entry_ladder_spread_fraction: 0.25
+  entry_ladder_max_concession_pct: 15
   # Close orders are the opposite — we are obligated to get out. An unfilled
   # close escalates: cancelled and resubmitted at a progressively worse price,
   # crossing further toward the market each attempt.
@@ -134,6 +142,14 @@ gate:
   # OI floor below also enforces.
   max_spread_pct_of_mid: 20.0
   min_open_interest: 200
+  # The spread is judged on a rolling median, not a snapshot. The indicative
+  # feed swings tens of percent minute to minute (UBER 2 Sep: 30.8% at 13:38,
+  # under 20% at 13:49 and 15:55, and unfillable at all three) — one
+  # instant's quote is noise. With fewer observations than the minimum, the
+  # snapshot is used as before. Open interest is a daily figure and needs
+  # no window.
+  liquidity_window_minutes: 10
+  liquidity_min_observations: 3
   # Concentration. Two positions in one underlying is already a doubled thesis;
   # a third is a bet, not a portfolio. The dollar cap above
   # (max_loss_per_underlying_pct) is the backstop — this is the count.

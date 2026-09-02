@@ -50,6 +50,8 @@ class ExecutionCfg(BaseModel):
     entry_ladder_steps: int
     entry_ladder_step_seconds: float
     entry_ladder_tick: float
+    entry_ladder_spread_fraction: float
+    entry_ladder_max_concession_pct: float
     close_retry_seconds: float
     close_max_attempts: int
     close_escalation_pct: float
@@ -66,6 +68,8 @@ class GateCfg(BaseModel):
     min_session_fraction: float
     max_spread_pct_of_mid: float
     min_open_interest: int
+    liquidity_window_minutes: float
+    liquidity_min_observations: int
     max_positions_per_underlying: int
     max_correlated_positions: int
     correlation_threshold: float

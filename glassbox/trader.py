@@ -108,6 +108,7 @@ class Trader:
         # Signals refused only on the opening-auction window, awaiting one
         # retry once it opens: signal_id -> (item, analyst view).
         self._deferred: dict[str, tuple] = {}
+        self._spread_history: dict[str, list[tuple[datetime, float]]] = {}
 
     # -- helpers ----------------------------------------------------------
     def _drop(self, stage: str, item: NewsItem, reason: str, **extra) -> Outcome:
@@ -323,6 +324,7 @@ class Trader:
 
         # 6. sizing — models influence size, never limits
         spread_pct, oi = structure_liquidity(structure, chain)
+        spread_pct = self._windowed_spread(structure, chain, spread_pct)
         features = build_features(
             view=view,
             edge=edge,
@@ -631,6 +633,34 @@ class Trader:
                 self._close(row, view, decision, now)
                 outcomes.append(Outcome("manage", False, decision.reason, view.position_id))
         return outcomes
+
+    def _windowed_spread(self, structure, chain, snapshot_pct: float) -> float:
+        """The structure's spread on a rolling median per leg, not an instant.
+
+        The indicative feed swings tens of percent minute to minute (UBER,
+        2 Sep: 30.8% at 13:38, under 20% at 13:49 and 15:55, unfillable at
+        all three). Each chain fetch records every leg's spread; the gate
+        judges the median over the window once enough observations exist,
+        and the snapshot until then. Worst leg wins, as before.
+        """
+        from statistics import median
+
+        window = self.cfg.gate.liquidity_window_minutes * 60
+        min_obs = self.cfg.gate.liquidity_min_observations
+        now = self.clock()
+        by_symbol = {c.symbol: c for c in chain}
+        worst = 0.0
+        for leg in structure.legs:
+            quote = by_symbol.get(leg.symbol)
+            if quote is None:
+                continue
+            hist = self._spread_history.setdefault(leg.symbol, [])
+            hist.append((now, float(quote.spread_pct_of_mid)))
+            recent = [v for t, v in hist if (now - t).total_seconds() <= window]
+            hist[:] = [(t, v) for t, v in hist if (now - t).total_seconds() <= window]
+            leg_pct = median(recent) if len(recent) >= min_obs else float(quote.spread_pct_of_mid)
+            worst = max(worst, leg_pct)
+        return worst if worst > 0 else snapshot_pct
 
     def _bell_context(self, row, now: datetime, market):
         """What the bell gate needs to decide whether this position may carry."""

@@ -147,6 +147,48 @@ def test_entry_ladder_concedes_one_tick_per_step(store, audit):
     assert any("expired" in e for e in events), events
 
 
+def test_entry_ladder_concession_scales_with_the_quoted_spread(store, audit):
+    """A flat cent was measured meaningless against wide quotes (UBER, 2 Sep:
+    two cents on a 30% spread, twice, no fill). Each rung concedes the larger
+    of one tick and a fraction of the quoted spread, capped in total."""
+    import json
+
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    pid = row["position_id"]
+    feats = json.loads(row["features_json"])
+    feats["spread_pct_of_mid"] = 30.0
+    store.upsert_position(pid, features_json=json.dumps(feats))
+    origin = float(row["entry_price"])
+    ex = t.cfg.execution
+    expected_step = max(ex.entry_ladder_tick, round(abs(origin) * 0.30 * ex.entry_ladder_spread_fraction, 2))
+    assert expected_step > ex.entry_ladder_tick, "the fixture must exercise the proportional path"
+
+    lifecycle.sync(t, NOW + timedelta(seconds=ex.entry_ladder_step_seconds + 1))
+    rung = store.latest_order_for(pid, "open")
+    assert float(rung["limit_price"]) == pytest.approx(origin + expected_step)
+
+
+def test_entry_ladder_total_concession_is_capped(store, audit):
+    import json
+
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    pid = row["position_id"]
+    feats = json.loads(row["features_json"])
+    feats["spread_pct_of_mid"] = 200.0  # absurdly wide: the cap must bind
+    store.upsert_position(pid, features_json=json.dumps(feats))
+    origin = float(row["entry_price"])
+    ex = t.cfg.execution
+    cap = abs(origin) * ex.entry_ladder_max_concession_pct / 100
+
+    step = ex.entry_ladder_step_seconds
+    lifecycle.sync(t, NOW + timedelta(seconds=step + 1))
+    lifecycle.sync(t, NOW + timedelta(seconds=2 * step + 1))
+    rung = store.latest_order_for(pid, "open")
+    assert float(rung["limit_price"]) - origin <= cap + 1e-9
+
+
 def test_entry_ladder_never_concedes_a_credit_to_zero(store, audit):
     router = NeverFillsRouter(store)
     t, _, row = open_via_pipeline(store, audit, router=router)
