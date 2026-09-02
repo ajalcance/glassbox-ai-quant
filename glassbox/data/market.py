@@ -12,6 +12,7 @@ merged on the OCC symbol rather than fetched twice.
 
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ class MarketData:
     quote_ttl: float = 20.0  # seconds
     bar_ttl: float = 3600.0
     models_dir: object = None
+    chain_capture_dir: object = None  # set to record chains for replay
     _cache: dict = field(default_factory=dict)
     _harrv: object = None
 
@@ -254,7 +256,49 @@ class MarketData:
                     delta=self._greek(snap, "delta"),
                 )
             )
+        self._capture_chain(symbol, expiry, spot, out)
         return out
+
+    def _capture_chain(self, symbol: str, expiry, spot: float, quotes: list) -> None:
+        """Append the quotes a decision was made on, for later replay.
+
+        The audit log records what we decided and why, but not the chain we
+        decided against — so a session cannot be re-run to ask "would this
+        change have fired?". Write-only, outside the decision path, and
+        failures are swallowed: a full disk must not stop trading.
+        """
+        if self.chain_capture_dir is None:
+            return
+        try:
+            from pathlib import Path
+
+            path = Path(self.chain_capture_dir) / f"{market_date():%Y-%m-%d}-chains.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "ts": now_utc().isoformat(),
+                "symbol": symbol,
+                "expiry": expiry.isoformat(),
+                "spot": spot,
+                "quotes": [
+                    {
+                        "symbol": q.symbol,
+                        "right": str(q.right),
+                        "strike": q.strike,
+                        "bid": q.bid,
+                        "ask": q.ask,
+                        "oi": q.open_interest,
+                        "iv": q.implied_volatility,
+                        "delta": q.delta,
+                    }
+                    for q in quotes
+                ],
+            }
+            with open(path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as e:  # noqa: BLE001 -- capture is never worth
+            # a trade: a full disk or a bad path must not stop the pipeline.
+            # No audit append here either — that write could fail the same way.
+            print(f"chain capture failed (non-fatal): {type(e).__name__}: {e}")
 
     def _snapshots(self, symbol: str, expiry: date) -> dict:
         def fetch():

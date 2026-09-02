@@ -45,3 +45,6 @@ soak/soak-results/
 # data/reports/ (on the persisted volume); the bare reports/ path is the
 # pre-move location and is ignored so a stale code path cannot commit output.
 /reports/
+
+# Captured option chains for post-session replay (large, regenerated daily)
+chains/

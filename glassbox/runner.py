@@ -156,6 +156,11 @@ class Runner:
             option_client=option_data_client(),
             store=self.store,
             root=ROOT,
+            # The audit log records what we decided; this records what we
+            # decided against, so a session can be replayed to ask whether a
+            # change would have fired. Only the live runner captures — drills
+            # and the scheduler would pollute the record with synthetic reads.
+            chain_capture_dir=ROOT / "chains",
         )
         router = (
             DryRunRouter(self.audit)

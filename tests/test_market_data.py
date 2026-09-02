@@ -223,3 +223,39 @@ def test_no_usable_price_raises_rather_than_guessing(store):
     md = _md(store, quote=FakeQuote(0.0, 0.0), trade=None)
     with pytest.raises(ValueError, match="no usable price"):
         md.spot("AAPL")
+
+
+def test_chain_capture_writes_quotes_for_replay(store, tmp_path):
+    """The audit records decisions, not the chain they were made against.
+    Without capture a session cannot be replayed to ask whether a change
+    would have fired (0 records carried quotes before 2 Sep)."""
+    import json as _json
+
+    from glassbox.data.market import MarketData
+
+    md = MarketData(
+        trading_client=None, stock_client=None, option_client=None, store=store,
+        root=None, chain_capture_dir=tmp_path,
+    )
+    from glassbox.chain import ContractQuote
+
+    quotes = [
+        ContractQuote("SPY260918P00440000", Right.PUT, 440.0, date(2026, 9, 18), 1.0, 1.2, 500),
+    ]
+    md._capture_chain("SPY", date(2026, 9, 18), 445.0, quotes)
+    files = list(tmp_path.glob("*-chains.jsonl"))
+    assert len(files) == 1
+    rec = _json.loads(files[0].read_text().strip())
+    assert rec["symbol"] == "SPY" and rec["spot"] == 445.0
+    assert rec["quotes"][0]["oi"] == 500 and rec["quotes"][0]["bid"] == 1.0
+
+
+def test_chain_capture_failure_never_breaks_pricing(store):
+    """A full disk must not stop trading."""
+    from glassbox.data.market import MarketData
+
+    md = MarketData(
+        trading_client=None, stock_client=None, option_client=None, store=store,
+        root=None, chain_capture_dir="/nonexistent/\0/bad",
+    )
+    md._capture_chain("SPY", date(2026, 9, 18), 445.0, [])  # must not raise
