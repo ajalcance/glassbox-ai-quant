@@ -742,6 +742,16 @@ def scenario_lifecycle_races(ctx) -> None:
         lpid = f"pos-{lsid}"
         ctx["coids"].add(lcoid)
         ex = cfg.execution
+        # The ladder refuses to rung past the contest's flatten deadline (a
+        # rung is a new risk commitment). Once that date passes, this phase
+        # would assert a swap the product is right to refuse — so the phase
+        # runs against a cfg whose deadline is ahead of us, and the guard
+        # itself is asserted separately below.
+        future = (datetime.now(UTC) + timedelta(days=3650)).isoformat()
+        ladder_cfg = cfg.model_copy(
+            update={"manage": cfg.manage.model_copy(update={"flatten_all_at": future})}
+        )
+        trader.cfg = ladder_cfg
         born = datetime.now(UTC) - timedelta(seconds=ex.entry_ladder_step_seconds + 5)
         with tick_lock:
             store.upsert_position(
@@ -792,6 +802,43 @@ def scenario_lifecycle_races(ctx) -> None:
               "expired on the position's age with rungs left unused; position failed, nothing in flight",
               f"position '{lrow['status']}', {len(store.orders_in_flight())} in flight (events: {events})",
               severity="CRITICAL")
+
+        # ...and the guard the phase above stepped around must itself hold:
+        # past the flatten deadline, and while halted, no rung may be sent.
+        trader.cfg = cfg  # restore the real deadline (already in the past or not)
+        past_cfg = cfg.model_copy(
+            update={"manage": cfg.manage.model_copy(
+                update={"flatten_all_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}
+            )}
+        )
+        gsid = f"{sid}-guard"
+        gcoid = client_order_id(gsid, key, 0)
+        gpid = f"pos-{gsid}"
+        ctx["coids"].add(gcoid)
+        with tick_lock:
+            store.upsert_position(
+                gpid, signal_id=gsid, underlying=structure.underlying,
+                kind=str(structure.kind), legs_json=json.dumps(legs), qty=1,
+                max_loss=380.0, status="opening",
+                opened_at=(datetime.now(UTC) - timedelta(seconds=ex.entry_ladder_step_seconds + 5)).isoformat(),
+            )
+            router.submit_structure(structure, 1, RESTING_LIMIT, gcoid, gpid)
+        for label, use_cfg, setup in (
+            ("past_deadline", past_cfg, lambda: None),
+            ("halted", ladder_cfg, lambda: store.set_state("halt_reason", "soak: divergence")),
+        ):
+            setup()
+            trader.cfg = use_cfg
+            with tick_lock:
+                lifecycle.sync(trader, datetime.now(UTC))
+            latest = store.latest_order_for(gpid, "open")
+            f.bad(latest is not None and latest["client_order_id"] == gcoid,
+                  "races", f"ladder_guard_{label}",
+                  f"no rung sent while {label} — an entry rung is a new risk commitment",
+                  f"RUNG SENT while {label}: {dict(latest) if latest else None}",
+                  severity="CRITICAL")
+        store.set_state("halt_reason", "")
+        trader.cfg = cfg
 
         f.bad(not hammer_errors, "races", "enforce_thread_safe",
               "8 concurrent enforce threads, zero exceptions",
