@@ -143,6 +143,20 @@ def _on_fill(trader, order, fill: float | None, now: datetime) -> str:
 
     if order["intent"] == "open":
         updates = {"status": "open"}
+        # The thesis is measured from where the underlying was when we got
+        # ON, not when we decided to try. The entry ladder can work for
+        # minutes, and AAPL on 3 Sep drifted 0.14% across those minutes —
+        # enough for a 0.10% vol_only forecast to read as already complete,
+        # closing the position on the very tick it filled for -$306. A spot
+        # we cannot re-read leaves the decision-time value in place.
+        try:
+            updates["entry_spot"] = float(trader.data.spot(row["underlying"]))
+        except Exception as e:  # noqa: BLE001 -- an unavailable spot keeps the
+            # decision-time value rather than corrupting the thesis with a guess.
+            trader.audit.append(
+                "fill_spot_refresh_skipped",
+                {"position_id": position_id, "error": f"{type(e).__name__}: {e}"},
+            )
         if fill is not None:
             updates["entry_price"] = fill
             # The risk the book carries is defined by what we actually paid or

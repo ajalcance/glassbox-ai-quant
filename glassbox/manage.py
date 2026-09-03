@@ -149,7 +149,15 @@ class PositionView:
             return moved >= required
         if self.thesis_direction == "down":
             return -moved >= required
-        # A vol_only thesis predicts magnitude without a sign; either side counts.
+        # A vol_only thesis predicts magnitude without a sign — but only a
+        # LONG-vol structure profits from magnitude. For short premium every
+        # direction is the wrong direction: movement falsifies the thesis
+        # rather than completing it, which this function's own contract says
+        # belongs to the stop. AAPL, 3 Sep: an iron condor with a 0.10%
+        # forecast closed 60 seconds after filling, for -$306, because the
+        # underlying had drifted 0.14% while the entry ladder worked.
+        if self.is_credit:
+            return False
         return abs(moved) >= required
 
     @property

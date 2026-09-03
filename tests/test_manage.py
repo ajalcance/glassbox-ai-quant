@@ -4,6 +4,7 @@ The barrier that closes a position also labels it, so these tests are as much
 about the training signal as about the exits.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -438,3 +439,30 @@ def test_missing_spot_cannot_evaluate_completion():
 def test_obligations_still_outrank_completion():
     complete = thesis_view(spot=105.0)
     assert evaluate_position(complete, CFG, LATER, deadline=OPENED).barrier is Barrier.DEADLINE
+
+
+def test_short_premium_never_completes_its_thesis_by_moving():
+    """AAPL, 3 Sep: an iron condor with a 0.10% vol_only forecast closed 60s
+    after filling, for -$306, because the underlying had drifted 0.14% while
+    the ladder worked. Short premium wants the underlying STILL — movement
+    falsifies the thesis, which is the stop's job, not thesis_complete's."""
+    from glassbox.structures import StructureKind
+
+    condor = credit_view(current_price=-1.80, kind=StructureKind.IRON_CONDOR)
+    condor = replace(condor, thesis_direction="vol_only", thesis_move_pct=0.1,
+                     entry_spot=100.0, current_spot=100.5)  # moved 0.5%, 5x "required"
+    assert not condor.thesis_move_achieved(CFG)
+    d = evaluate_position(condor, CFG, LATER)
+    assert d.barrier is not Barrier.THESIS_COMPLETE
+
+
+def test_long_vol_still_completes_on_magnitude_either_way():
+    """A long strangle profits from magnitude regardless of sign, so the
+    vol_only branch must keep working for it."""
+    from glassbox.structures import StructureKind
+
+    strangle = debit_view(current_price=2.50, kind=StructureKind.LONG_STRANGLE)
+    for spot in (100.5, 99.5):  # up and down both count
+        v = replace(strangle, thesis_direction="vol_only", thesis_move_pct=0.1,
+                    entry_spot=100.0, current_spot=spot)
+        assert v.thesis_move_achieved(CFG), f"magnitude at spot {spot} must complete"
