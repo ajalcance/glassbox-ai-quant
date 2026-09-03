@@ -265,7 +265,7 @@ def _maybe_expire(trader, order, now: datetime) -> str:
             # filled). Each elapsed step concedes one tick toward the market,
             # at most entry_ladder_steps times; the timeout below still ends
             # the attempt, so the chase is bounded at steps x tick.
-            return _escalate_entry(trader, order, total_age, row)
+            return _escalate_entry(trader, order, total_age, row, now)
         try:
             trader.router.cancel(order["client_order_id"], order["alpaca_order_id"])
         except Exception as e:  # noqa: BLE001 -- if the cancel itself fails the
@@ -291,7 +291,7 @@ def _maybe_expire(trader, order, now: datetime) -> str:
     return _escalate_close(trader, order)
 
 
-def _escalate_entry(trader, order, total_age: float, row) -> str:
+def _escalate_entry(trader, order, total_age: float, row, now: datetime) -> str:
     """Concede one tick on a resting entry, a bounded number of times.
 
     Mirrors _escalate_close's cancel-and-resubmit shape, but where a close is
@@ -303,12 +303,31 @@ def _escalate_entry(trader, order, total_age: float, row) -> str:
     escalating instead (a zero limit is not an order).
     """
     from glassbox.execution.ids import client_order_id
+    from glassbox.reconcile import is_halted
     from glassbox.structures import structure_key
 
     cfg = trader.cfg.execution
     position_id = order["position_id"]
     if row is None:
         return ""
+
+    # A rung is a NEW opening order, and sync() runs before tick()'s halt
+    # check — so without this the ladder would keep committing risk through a
+    # reconcile divergence or an engaged kill switch. Everything else sync
+    # does is risk-reducing (cancel a stale entry) or an obligation (escalate
+    # a close); this is the one path that adds exposure, so it carries the
+    # guard the surrounding loop cannot give it.
+    if is_halted(trader.store):
+        return ""
+    # Nor may a rung open a position the gate would now refuse for having no
+    # session left: an entry submitted at 19:51 could otherwise rung at 19:54
+    # and fill one minute before the deadline flatten.
+    try:
+        deadline = datetime.fromisoformat(trader.cfg.manage.flatten_all_at)
+        if now >= deadline:
+            return ""
+    except (TypeError, ValueError):
+        pass  # an unparseable deadline must not disable the ladder entirely
     attempt = int(trader.store.get_state(f"entry_attempt:{position_id}") or 0)
     if attempt >= cfg.entry_ladder_steps:
         return ""  # ladder exhausted; rest at the final price until timeout

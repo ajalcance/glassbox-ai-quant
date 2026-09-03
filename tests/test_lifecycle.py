@@ -409,3 +409,33 @@ def test_escalation_is_bounded(store, audit):
         for line in path.read_text().splitlines()
     ]
     assert any(r.get("kind") == "close_exhausted" for r in exhausted)
+
+
+def test_entry_ladder_will_not_rung_through_a_halt(store, audit):
+    """sync() runs BEFORE tick()'s halt check, and a rung is a new opening
+    order — the one thing in that path that commits risk. A reconcile
+    divergence or an engaged kill switch must stop it."""
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    before = store.latest_order_for(row["position_id"], "open")["client_order_id"]
+    store.set_state("halt_reason", "reconcile divergence")
+
+    events = lifecycle.sync(t, NOW + timedelta(seconds=t.cfg.execution.entry_ladder_step_seconds + 1))
+    assert not any("ladder" in e for e in events), events
+    assert store.latest_order_for(row["position_id"], "open")["client_order_id"] == before
+    assert not router.cancelled, "no cancel-and-resubmit while halted"
+
+
+def test_entry_ladder_will_not_rung_past_the_flatten_deadline(store, audit):
+    """A rung must not open a position the gate would refuse for having no
+    session left — one minute before the deadline flatten."""
+    from datetime import datetime as _dt
+
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    before = store.latest_order_for(row["position_id"], "open")["client_order_id"]
+
+    past = _dt.fromisoformat(t.cfg.manage.flatten_all_at) + timedelta(minutes=1)
+    events = lifecycle.sync(t, past)
+    assert not any("ladder" in e for e in events), events
+    assert store.latest_order_for(row["position_id"], "open")["client_order_id"] == before
