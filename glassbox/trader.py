@@ -450,6 +450,7 @@ class Trader:
             duplicate_open=self.has_duplicate(structure),
             corporate_blackout=blackout,
             macro_window=macro_window,
+            now=self.clock(),
         )
         decision = evaluate(ctx, self.cfg)
         self.audit.append(

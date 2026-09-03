@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from glassbox.portfolio import Greeks, PortfolioState, correlated_exposure
 from glassbox.structures import Structure, UndefinedRiskError, assert_defined_risk
@@ -69,6 +70,9 @@ class GateContext:
     corporate_blackout: object | None = None
     # --- macro releases -----------------------------------------------------
     macro_window: object | None = None
+    # --- clock --------------------------------------------------------------
+    # None means "not supplied"; time-based checks pass rather than guess.
+    now: datetime | None = None
 
     @property
     def total_max_loss(self) -> float:
@@ -134,6 +138,34 @@ def _check_market_window(ctx, cfg) -> CheckResult:
             f"{ctx.minutes_to_close}m to close < {cfg.gate.skip_last_minutes}m",
         )
     return CheckResult("market_window", True, f"{ctx.minutes_to_close}m to close")
+
+
+def _check_flatten_deadline(ctx, cfg) -> CheckResult:
+    """Never open a position the deadline would close on its next tick.
+
+    The flatten deadline governed exits only: manage_positions received it,
+    the gate never saw it. So past the deadline the pipeline would keep
+    approving entries that evaluate_position closed one tick later, paying
+    the round trip on every signal — the AAPL condor's open-and-close-in-60s
+    failure, but systematic. A position must have somewhere to live.
+    """
+    if ctx.now is None:
+        return CheckResult("flatten_deadline", True, "no clock supplied")
+    raw = getattr(cfg.manage, "flatten_all_at", "") or ""
+    if not raw:
+        return CheckResult("flatten_deadline", True, "no flatten deadline set")
+    try:
+        deadline = datetime.fromisoformat(raw)
+    except ValueError:
+        return CheckResult("flatten_deadline", True, f"unparseable deadline {raw!r}")
+    if ctx.now >= deadline:
+        return CheckResult(
+            "flatten_deadline",
+            False,
+            f"flatten deadline {deadline:%Y-%m-%d %H:%M %Z} has passed — "
+            "a new position would be closed on the next tick",
+        )
+    return CheckResult("flatten_deadline", True, f"deadline {deadline:%Y-%m-%d %H:%M} ahead")
 
 
 def _check_session_room(ctx, cfg) -> CheckResult:
@@ -358,6 +390,7 @@ CHECKS: tuple[Callable, ...] = (
     _check_halted,
     _check_market_window,
     _check_session_room,
+    _check_flatten_deadline,
     _check_defined_risk,
     _check_position_size,
     _check_portfolio_heat,

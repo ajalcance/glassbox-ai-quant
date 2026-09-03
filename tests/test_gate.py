@@ -287,3 +287,21 @@ def test_widened_session_edges_are_enforced(bull_put):
     late = evaluate(ctx(structure=bull_put, minutes_to_close=15), CFG)
     assert "market_window" in veto_names(early)
     assert "market_window" in veto_names(late)
+
+
+def test_gate_refuses_entries_once_the_flatten_deadline_has_passed(bull_put):
+    """A position must have somewhere to live. Past the flatten deadline the
+    manager closes on the next tick, so approving an entry pays a round trip
+    for nothing — the AAPL open-and-close-in-60s failure, systematised."""
+    from datetime import UTC, datetime, timedelta
+
+    deadline = datetime.fromisoformat(CFG.manage.flatten_all_at)
+    after = evaluate(ctx(structure=bull_put, now=deadline + timedelta(minutes=1)), CFG)
+    assert "flatten_deadline" in veto_names(after)
+
+    before = evaluate(ctx(structure=bull_put, now=deadline - timedelta(hours=1)), CFG)
+    assert "flatten_deadline" not in veto_names(before)
+
+    # no clock supplied must not veto — time checks pass rather than guess
+    assert "flatten_deadline" not in veto_names(evaluate(ctx(structure=bull_put), CFG))
+    assert UTC  # silence unused-import pedantry

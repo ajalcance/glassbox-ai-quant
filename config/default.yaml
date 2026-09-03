@@ -224,7 +224,12 @@ manage:
   bell_no_weekend_carry: true
   bell_near_stop_fraction: 0.5
   bell_max_unprotected_pct_equity: 0.25
-  flatten_all_at: "2026-09-03T15:55:00-04:00"   # Thu before close, ET
+  # Hard "be flat by" time. A hardcoded date is a commercial wart — this
+  # should become a rolling per-session time or be nullable; until then it
+  # is moved deliberately. Moved 3 Sep to Fri 4 Sep to test a high-volatility
+  # NFP session. The gate refuses new entries once it passes, so a stale
+  # value can no longer produce open-and-immediately-close churn.
+  flatten_all_at: "2026-09-04T15:55:00-04:00"   # Fri before close, ET
 
 signal:
   novelty_window_hours: 72
