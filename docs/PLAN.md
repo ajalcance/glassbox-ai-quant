@@ -1,5 +1,12 @@
 # GlassBox AI Quant — Hackathon Plan
 
+> **Historical document.** This is the plan as written before the contest, kept
+> unedited as a record of intent. Where it and the code disagree, the code and
+> the README are current: the gate grew to 19 checks, the triple barrier became
+> eleven severity-ordered barriers, and R was raised, reverted and restored.
+> Outcomes are in the README.
+
+
 **One-liner:** a news-driven, risk-gated options desk whose every decision is inspectable — the opposite of a black box.
 
 **Governing invariant:** *ML sets selection and sizing. Deterministic code sets limits.* A model failure degrades to "sized too small," never to "lost the account."
@@ -154,7 +161,7 @@ idea the pipeline saw at reduced size** — the signal that reached the edge tes
 and was refused *only* for sitting inside the ratio band. Signals refused for
 confidence, bad data, VRP, or any gate check are never floor candidates; the
 floor relaxes exactly one bar (the ratio band), once per day, at half risk, and
-the full 18-check gate still applies at execution time. Every floor trade is
+the full gate still applies at execution time. Every floor trade is
 labelled as such in the audit log — funds run "best ideas" books, and this is
 one, not a pretended threshold crossing.
 

@@ -4,13 +4,67 @@
 
 Built for the [Alpaca AI Trading Agents Hackathon](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon) (lablab.ai × Alpaca, Aug 28 – Sep 4 2026). Runs entirely against Alpaca's **paper trading** environment.
 
+---
+
+## 📊 Paper trading account — for judges
+
+| | |
+|---|---|
+| **Account number** | **`PA31QN3VRL7B`** |
+| Environment | Alpaca **paper trading** (no real capital, at any point) |
+| Starting equity | $100,000.00 |
+| Measurement window | Mon 31 Aug 09:30 ET → Thu 3 Sep 15:55 ET |
+| **Equity at the flatten** | **$99,820.65** (−0.18%) |
+| Positions at snapshot | **flat** — all closed before the Thursday close |
+| Live dashboard | **http://64.177.40.87** (read-only, no controls) |
+
+Every order, veto and fill on that account is reproducible from the
+hash-chained audit log in this repository. A separate development account
+(`PA3CYQV2PBDK`) carried all drills, chaos soaks and destructive testing; none
+of its activity forms any part of the measurement above.
+
+### What it actually did
+
+Six positions ran the full lifecycle — news → analyst → edge test → gate →
+order → fill → management → realised close — with no human in the loop at any
+point. Every figure below is realised P&L from actual fills, not marks.
+
+| Underlying | Structure | Qty | Exit barrier | Realised |
+|---|---|---:|---|---:|
+| TLT | put debit spread | 17 | `trail` | **+$85** |
+| NVDA | call debit spread | 1 | `deadline` | **+$39** |
+| TSLA | bull put spread | 1 | `thesis_complete` | **+$34** |
+| COIN | bear call spread | 1 | `breakeven` | −$10 |
+| AAPL | bear call spread | 2 | `bell` | −$16 |
+| AAPL | iron condor | 9 | `thesis_complete` | **−$306** |
+| | | | **Total realised** | **−$174** |
+
+**One defect cost more than everything else earned.** The iron condor opened
+and closed within sixty seconds: a `vol_only` thesis counted movement as
+*success* for a short-premium structure, and the entry spot was captured at
+decision time rather than fill time. Both are fixed with regression tests
+(`362cba2`). Without that trade the week closes **+$132**. It is left in the
+table because a system that hides its worst trade is not a glass box.
+
+Peak drawdown was **0.46%** against a −6% halt. Five of eleven barrier types
+fired live; only `STOP` never triggered. Reconciliation halted the system on
+divergence twice and released it correctly both times.
+
+**What four days does not establish:** whether the strategy has edge. Six
+trades is not a sample, directional accuracy measured 51% over 111 calls, and
+the meta-labeler never reached its 30-outcome training threshold — so the ML
+sizing path ran on its honest fallback throughout. The guards are demonstrated;
+the alpha is not.
+
+---
+
 ## What it does
 
 News arrives on Alpaca's real-time stream. A deterministic filter kills ~95% of it. Survivors go to an LLM (Fireworks) that does the one job LLMs are best at — reading unstructured text — and returns **structured estimates, never trade instructions**. Deterministic code then asks the only question that matters in options:
 
 > **Is the move I expect bigger or smaller than the move the options are already pricing?**
 
-That comparison — expected move vs. IV-implied move — is the signal. A meta-labeler (regularised logistic regression, trained on the agent's own past trades) scores how much to trust it. A contextual bandit (Thompson sampling) picks which defined-risk options structure fits the regime. A non-bypassable 18-check risk gate approves or vetoes. Every step is written to a hash-chained audit log.
+That comparison — expected move vs. IV-implied move — is the signal. A meta-labeler (regularised logistic regression, trained on the agent's own past trades) scores how much to trust it. A contextual bandit (Thompson sampling) picks which defined-risk options structure fits the regime. A non-bypassable 19-check risk gate approves or vetoes. Every step is written to a hash-chained audit log.
 
 **The governing invariant:** *ML sets selection and sizing. Deterministic code sets limits.* A model failure degrades to "sized too small" — never to "lost the account."
 
@@ -23,9 +77,9 @@ Alpaca news stream (WebSocket)
           └─ EDGE TEST: expected move vs IV-implied move (ATM straddle)
               └─ meta-labeler P(profit) → position size
                   └─ bandit selects defined-risk structure (6 arms)
-                      └─ RISK GATE (18 checks, pure function, can veto)
+                      └─ RISK GATE (19 checks, pure function, can veto)
                           └─ idempotent multi-leg execution (client_order_id, circuit breaker)
-                              └─ triple-barrier trade manager (target / stop / time)
+                              └─ trade manager: 11 severity-ordered barriers
                                   └─ hash-chained audit log ──→ retrains meta-labeler + bandit
 ```
 
@@ -186,16 +240,19 @@ git log --reverse --format="%aI  %s"
 **Competition account.** P&L is measured on a dedicated paper account created
 for the contest, funded at $100,000, trading from Monday 31 August 09:30 ET.
 Development and all drills above ran on a separate testing account, whose
-activity forms no part of the official measurement. Positions are flattened
+activity forms no part of the official measurement. Positions were flattened
 before the close on Thursday 3 September, ahead of the EOD equity snapshot —
-`manage.flatten_all_at` in `config/default.yaml` is set to that deadline, which
-also avoids any exercise or assignment on 3 September expiries.
+`manage.flatten_all_at` in `config/default.yaml` held that deadline, which also
+avoided any exercise or assignment on 3 September expiries. The book reached
+the snapshot flat.
 
-**Risk sizing: raised before the window, reverted on day one.** Base risk per
-trade is **0.5% of equity**. It was raised to 1.0% on 30 August, then reverted
-on 31 August — the first day of the measurement window. Both the change and the
-reversal are recorded here rather than quietly settled, because a number that
-moved during the contest deserves its reasoning in public.
+**Risk sizing: raised, reverted, then restored once the cause was fixed.**
+Base risk per trade is **1.0% of equity**. It was raised to 1.0% on 30 August,
+reverted to 0.5% on 31 August — the first day of the measurement window — and
+restored to 1.0% on 1 September after the interaction that forced the revert
+was fixed. All three moves are recorded here rather than quietly settled,
+because a number that changed during the contest deserves its reasoning in
+public.
 
 The raise was mechanical: the meta-labeler abstains until it has 30 labelled
 outcomes, which four trading days cannot produce, so its confidence multiplier
