@@ -333,3 +333,37 @@ def test_positions_opened_today_includes_ones_already_closed(store):
     )
     assert store.positions_opened_on("2026-09-01") == 1
     assert store.open_positions() == []
+
+
+def test_reconcile_never_clears_a_halt_it_did_not_set(store, audit):
+    """The supervisor writes the same key for a daily-loss or drawdown
+    breach. Before the halt source was tagged, the trader's next routine
+    reconcile — positions match, nothing diverged — silently cleared the
+    outermost guard. Found by the soak's races scenario, 4 Sep."""
+    from glassbox.reconcile import HALT_KEY, HALT_SOURCE_KEY
+
+    store.set_state(HALT_KEY, "daily loss -2.10% breached -2.0%")
+    store.set_state(HALT_SOURCE_KEY, "supervisor")
+
+    result = enforce(store, audit, broker_positions=[])
+    assert result.ok, "nothing is diverged — reconcile itself is happy"
+    assert is_halted(store), "a supervisor halt must survive a clean reconcile"
+
+
+def test_reconcile_will_not_clear_a_halt_of_unknown_origin(store, audit):
+    """Not knowing who halted is a reason to stay halted."""
+    from glassbox.reconcile import HALT_KEY
+
+    store.set_state(HALT_KEY, "halted by something that left no source")
+    enforce(store, audit, broker_positions=[])
+    assert is_halted(store)
+
+
+def test_reconcile_still_clears_its_own_halt_when_the_divergence_resolves(store, audit):
+    add_position(store, "pos-1", [SHORT_PUT, LONG_PUT])
+    assert not enforce(store, audit, broker_positions=[]).ok
+    assert is_halted(store)
+
+    broker = [FakeBrokerPos("SPY260918P00440000", -1), FakeBrokerPos("SPY260918P00435000", 1)]
+    assert enforce(store, audit, broker).ok
+    assert not is_halted(store), "reconcile's own halt clears when it resolves"

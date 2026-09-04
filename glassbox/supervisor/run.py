@@ -19,7 +19,7 @@ from glassbox.audit import AuditLog
 from glassbox.clock import now_utc
 from glassbox.config import load_config
 from glassbox.data.alpaca_client import supervisor_trading_client
-from glassbox.reconcile import HALT_KEY
+from glassbox.reconcile import HALT_KEY, HALT_SOURCE_KEY
 from glassbox.store import Store
 from glassbox.supervisor.guards import (
     KILL_SWITCH_FILE,
@@ -151,6 +151,7 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
         },
     )
     store.set_state(HALT_KEY, verdict.reason)
+    store.set_state(HALT_SOURCE_KEY, "supervisor")
     print(f"GUARD {verdict.action}: {verdict.reason}", file=sys.stderr)
     if not dry_run:
         flatten_all(client, audit)

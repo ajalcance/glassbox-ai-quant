@@ -13,6 +13,15 @@ import json
 from dataclasses import dataclass, field
 
 HALT_KEY = "halt_reason"
+# Who latched the halt. reconcile clears only its OWN halts: the supervisor
+# writes the same key for a daily-loss or drawdown breach, and before this
+# existed a routine reconcile pass — positions match, nothing diverged —
+# silently cleared the outermost guard on its next tick. Found by the soak's
+# races scenario on 4 Sep, which set a halt while enforce ran concurrently.
+# An unrecognised source is never cleared: not knowing who halted is a reason
+# to stay halted.
+HALT_SOURCE_KEY = "halt_source"
+HALT_SOURCE_RECONCILE = "reconcile"
 SEEN_ASSIGNMENTS_KEY = "seen_assignments"
 
 
@@ -136,11 +145,14 @@ def enforce(store, audit, broker_positions) -> ReconcileResult:
     """
     result = reconcile(store, broker_positions)
     if result.ok:
-        if store.get_state(HALT_KEY):
+        source = store.get_state(HALT_SOURCE_KEY)
+        if store.get_state(HALT_KEY) and source == HALT_SOURCE_RECONCILE:
             store.set_state(HALT_KEY, "")
+            store.set_state(HALT_SOURCE_KEY, "")
             audit.append("resume", {"source": "reconcile", "note": "divergence cleared"})
     else:
         store.set_state(HALT_KEY, result.reason)
+        store.set_state(HALT_SOURCE_KEY, HALT_SOURCE_RECONCILE)
         audit.append(
             "halt",
             {"source": "reconcile", "reason": result.reason, "detail": result.detail},
@@ -178,6 +190,7 @@ def check_assignments(store, audit, activities) -> tuple[str, ...]:
 
     reason = "option assignment: " + ", ".join(str(a) for a in fresh)
     store.set_state(HALT_KEY, reason)
+    store.set_state(HALT_SOURCE_KEY, "assignment")
     audit.append(
         "halt",
         {
