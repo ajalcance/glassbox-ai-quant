@@ -60,6 +60,7 @@ class ExitReplay:
     replay_pnl: float | None
     replay_tick: int | None
     replay_ts: str
+    has_spot: bool = False  # every tick recorded the spot: thesis barriers replayable
 
     @property
     def exited_in_window(self) -> bool:
@@ -67,7 +68,9 @@ class ExitReplay:
 
     @property
     def actual_needs_context(self) -> bool:
-        """The real exit used a barrier this module cannot evaluate."""
+        """The real exit used a barrier this replay could not evaluate."""
+        if self.actual_barrier == "thesis_complete" and self.has_spot:
+            return False
         return self.actual_barrier in CONTEXT_BARRIERS
 
     @property
@@ -80,13 +83,24 @@ class ExitReplay:
         return None if self.replay_pnl is None else self.replay_pnl - self.actual_realized
 
 
-def _paths(audit_dir: Path, days) -> dict[str, list[dict]]:
-    """Per position, its ordered manage ticks."""
+def _paths(audit_dir: Path, days) -> tuple[dict[str, list[dict]], dict[date, datetime]]:
+    """Per position, its ordered manage ticks — and per day, the deadline the
+    trader actually enforced that day.
+
+    The deadline is read from that day's `trader_start` record (written since
+    5 Sep). For earlier days it is inferred from the first `deadline`-barrier
+    close of the day: the flatten fires at the deadline, so its timestamp is
+    the deadline to within one tick. Only when neither exists does the caller's
+    fallback apply — the CURRENT config's date, which is the value that made
+    NVDA's real 3 Sep exit unreproducible once it had moved to 4 Sep.
+    """
     out: dict[str, list[dict]] = {}
+    deadlines: dict[date, datetime] = {}
     for day in days:
         path = Path(audit_dir) / f"{day:%Y-%m-%d}-trader.jsonl"
         if not path.exists():
             continue
+        inferred: datetime | None = None
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
@@ -94,11 +108,25 @@ def _paths(audit_dir: Path, days) -> dict[str, list[dict]]:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if rec.get("kind") == "manage" and rec.get("unrealized_pnl") is not None:
+            kind = rec.get("kind")
+            if kind == "trader_start" and rec.get("deadline"):
+                try:
+                    deadlines[day] = datetime.fromisoformat(rec["deadline"])
+                except ValueError:
+                    pass
+            elif kind == "manage" and rec.get("unrealized_pnl") is not None:
                 out.setdefault(rec["position_id"], []).append(rec)
+                if (
+                    inferred is None
+                    and rec.get("action") == "close"
+                    and str(rec.get("barrier")) == "deadline"
+                ):
+                    inferred = datetime.fromisoformat(rec["ts"])
+        if day not in deadlines and inferred is not None:
+            deadlines[day] = inferred
     for rows in out.values():
         rows.sort(key=lambda r: r["ts"])
-    return out
+    return out, deadlines
 
 
 def _hours_to_expiry(row, when: datetime) -> float:
@@ -112,8 +140,11 @@ def _hours_to_expiry(row, when: datetime) -> float:
 
 
 def replay_exits(store, audit_dir, days, cfg, deadline: datetime | None = None) -> list[ExitReplay]:
-    """Re-run every closed position's recorded path through the barriers."""
-    paths = _paths(Path(audit_dir), days)
+    """Re-run every closed position's recorded path through the barriers.
+
+    `deadline` is only a fallback: each day's own recorded deadline wins.
+    """
+    paths, day_deadlines = _paths(Path(audit_dir), days)
     out: list[ExitReplay] = []
 
     for row in store._conn.execute(
@@ -128,6 +159,11 @@ def replay_exits(store, audit_dir, days, cfg, deadline: datetime | None = None) 
         qty = int(row["qty"])
         entry = float(row["entry_price"])
         max_loss_per_spread = float(row["max_loss"]) / qty if qty else float(row["max_loss"])
+
+        # thesis_complete is replayable only if EVERY tick recorded the spot it
+        # judged against (recorded since 5 Sep). Anything less and the thesis
+        # barrier stays silent rather than firing on a partial view.
+        has_spot = all(t.get("current_spot") for t in ticks)
 
         fired_barrier, fired_pnl, fired_tick, fired_ts = "", None, None, ""
         peak = 0.0
@@ -147,12 +183,13 @@ def replay_exits(store, audit_dir, days, cfg, deadline: datetime | None = None) 
                 horizon_hours=float(row["horizon_hours"] or 0.0),
                 hours_to_expiry=_hours_to_expiry(row, when),
                 peak_pnl=peak,
-                # deliberately left empty: a path carries no spot, so the
-                # thesis barriers cannot and must not fire here.
-                thesis_direction="",
-                thesis_move_pct=0.0,
+                thesis_direction=(row["thesis_direction"] or "") if has_spot else "",
+                thesis_move_pct=float(row["thesis_move_pct"] or 0.0) if has_spot else 0.0,
+                entry_spot=float(row["entry_spot"] or 0.0) if has_spot else 0.0,
+                current_spot=float(tick["current_spot"]) if has_spot else 0.0,
             )
-            decision = evaluate_position(view, cfg, when, deadline)
+            day_deadline = day_deadlines.get(when.date(), deadline)
+            decision = evaluate_position(view, cfg, when, day_deadline)
             if decision.action is Action.CLOSE and decision.barrier is not Barrier.NONE:
                 fired_barrier = str(decision.barrier)  # StrEnum: "stop", "trail", ...
                 fired_pnl, fired_tick, fired_ts = pnl, i, tick["ts"]
@@ -174,6 +211,7 @@ def replay_exits(store, audit_dir, days, cfg, deadline: datetime | None = None) 
             replay_pnl=fired_pnl,
             replay_tick=fired_tick,
             replay_ts=fired_ts,
+            has_spot=has_spot,
         ))
     return out
 

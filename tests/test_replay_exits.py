@@ -80,3 +80,64 @@ def test_the_reconstructed_view_reproduces_the_recorded_pnl(store, tmp_path):
          kind="bull_put_spread", barrier="stop", realized=-120.0)
     res = replay_exits(store, audit, [DAY], CFG)[0]
     assert res.trough_pnl == -120
+
+
+def test_deadline_comes_from_the_days_own_recording_not_the_current_config(store, tmp_path):
+    """NVDA's real deadline exit on 3 Sep could not reproduce once the config's
+    date moved to 4 Sep. Each day's trader_start now records the deadline it
+    enforced, and the replay uses that."""
+    audit = tmp_path / "audit"
+    seed(store, audit, [0, +5, +8, +12])
+    recorded_deadline = OPENED + timedelta(minutes=2)
+    with open(audit / f"{DAY}-trader.jsonl", "a") as f:
+        f.write(json.dumps({"kind": "trader_start", "ts": OPENED.isoformat(),
+                            "deadline": recorded_deadline.isoformat()}) + "\n")
+    # fallback deadline far in the future must LOSE to the recorded one
+    res = replay_exits(store, audit, [DAY], CFG, deadline=OPENED + timedelta(days=30))[0]
+    assert res.replay_barrier == "deadline"
+    assert res.replay_tick == 2, "fires at the first tick at or past the recorded deadline"
+
+
+def test_deadline_is_inferred_from_the_first_real_deadline_close_when_unrecorded(store, tmp_path):
+    """Days before trader_start carried the deadline: the flatten fired AT the
+    deadline, so its timestamp is the deadline to within a tick."""
+    audit = tmp_path / "audit"
+    seed(store, audit, [0, +5, +8])
+    with open(audit / f"{DAY}-trader.jsonl", "a") as f:
+        f.write(json.dumps({"kind": "manage", "position_id": "pos-OTHER", "action": "close",
+                            "barrier": "deadline", "unrealized_pnl": 1.0,
+                            "ts": (OPENED + timedelta(minutes=1)).isoformat()}) + "\n")
+    res = replay_exits(store, audit, [DAY], CFG)[0]
+    assert res.replay_barrier == "deadline" and res.replay_tick == 1
+
+
+def test_thesis_complete_replays_once_every_tick_carries_spot(store, tmp_path):
+    """The reason spot is recorded: a debit whose underlying travels the
+    forecast distance must complete in replay exactly as it did live."""
+    audit = tmp_path / "audit"
+    pid = seed(store, audit, [0, +5, +10])
+    store.upsert_position(pid, thesis_direction="up", thesis_move_pct=1.0, entry_spot=100.0)
+    # rewrite the ticks with spot: flat, flat, then +1.2% — the thesis completes
+    path = audit / f"{DAY}-trader.jsonl"
+    rows = [json.loads(l) for l in path.read_text().splitlines()]
+    for r, spot in zip(rows, (100.0, 100.5, 101.2)):
+        r["current_spot"] = spot
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+    res = replay_exits(store, audit, [DAY], CFG)[0]
+    assert res.has_spot
+    assert res.replay_barrier == "thesis_complete" and res.replay_tick == 2
+
+
+def test_thesis_complete_stays_silent_when_any_tick_lacks_spot(store, tmp_path):
+    audit = tmp_path / "audit"
+    pid = seed(store, audit, [0, +5, +10], barrier="thesis_complete", realized=12.0)
+    store.upsert_position(pid, thesis_direction="up", thesis_move_pct=1.0, entry_spot=100.0)
+    path = audit / f"{DAY}-trader.jsonl"
+    rows = [json.loads(l) for l in path.read_text().splitlines()]
+    rows[0]["current_spot"] = 100.0  # only ONE tick carries spot
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    res = replay_exits(store, audit, [DAY], CFG)[0]
+    assert not res.has_spot
+    assert res.replay_barrier != "thesis_complete"
+    assert res.actual_needs_context, "still flagged: the path cannot support it"

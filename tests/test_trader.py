@@ -1024,3 +1024,23 @@ def test_liquidity_is_judged_on_a_rolling_median_not_a_snapshot(store, audit):
     t._windowed_spread(structure, tight, 1.0)
     windowed = t._windowed_spread(structure, wide, 50.0)  # third observation, a wide one
     assert windowed < 5.0, "median of (tight, tight, wide) is tight — the spike is noise"
+
+
+def test_manage_records_carry_the_spot_the_barriers_judged_against(store, audit):
+    """Without the spot on every tick, a recorded P&L path cannot replay
+    thesis_complete — five of the first week's eight closes were unreplayable
+    for lack of this one number."""
+    t = make_trader(store, audit)
+    assert t.process_news(news(), market()).traded
+    settle(t)
+    t.data.price = 2.10
+    t.manage_positions(NOW + timedelta(minutes=5), None, market())
+    manage = [
+        json.loads(line)
+        for path in audit.dir.glob("*-trader.jsonl")
+        for line in path.read_text().splitlines()
+        if '"manage"' in line
+    ]
+    assert manage, "the manage tick must have been audited"
+    assert manage[-1]["current_spot"] == SPOT
+    assert manage[-1]["entry_spot"] == SPOT

@@ -628,6 +628,12 @@ class Trader:
                     "unrealized_pnl": decision.unrealized_pnl,
                     "label": decision.label,
                     "at_bell": at_bell,
+                    # The spot the thesis barriers judged against. Without it a
+                    # recorded P&L path cannot replay thesis_complete — five of
+                    # the first week's eight closes were unreplayable for lack
+                    # of this one number.
+                    "current_spot": view.current_spot,
+                    "entry_spot": view.entry_spot,
                 },
             )
             if decision.action is Action.CLOSE:

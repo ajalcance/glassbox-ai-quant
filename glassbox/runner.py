@@ -366,7 +366,15 @@ class Runner:
         print(f"  deadline: {self._deadline}")
         self.audit.append(
             "trader_start",
-            {"dry_run": self.dry_run, "universe_size": len(self.universe)},
+            {
+                "dry_run": self.dry_run,
+                "universe_size": len(self.universe),
+                # The flatten deadline this process enforces. A replay of this
+                # day must use THIS value, not whatever the config says later —
+                # NVDA's real deadline exit on 3 Sep could not reproduce once
+                # the date had moved to 4 Sep.
+                "deadline": self._deadline.isoformat() if self._deadline else None,
+            },
         )
 
         check = preflight.run(self.trading, self.data)
