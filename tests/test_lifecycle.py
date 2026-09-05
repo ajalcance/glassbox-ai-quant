@@ -429,13 +429,15 @@ def test_entry_ladder_will_not_rung_through_a_halt(store, audit):
 def test_entry_ladder_will_not_rung_past_the_flatten_deadline(store, audit):
     """A rung must not open a position the gate would refuse for having no
     session left — one minute before the deadline flatten."""
-    from datetime import datetime as _dt
-
     router = NeverFillsRouter(store)
     t, _, row = open_via_pipeline(store, audit, router=router)
     before = store.latest_order_for(row["position_id"], "open")["client_order_id"]
 
-    past = _dt.fromisoformat(t.cfg.manage.flatten_all_at) + timedelta(minutes=1)
+    deadline = NOW + timedelta(minutes=1)
+    t.cfg = t.cfg.model_copy(update={
+        "manage": t.cfg.manage.model_copy(update={"flatten_all_at": deadline.isoformat()})
+    })
+    past = deadline + timedelta(minutes=1)
     events = lifecycle.sync(t, past)
     assert not any("ladder" in e for e in events), events
     assert store.latest_order_for(row["position_id"], "open")["client_order_id"] == before

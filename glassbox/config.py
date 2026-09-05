@@ -93,7 +93,7 @@ class ManageCfg(BaseModel):
     bell_no_weekend_carry: bool
     bell_near_stop_fraction: float
     bell_max_unprotected_pct_equity: float
-    flatten_all_at: str
+    flatten_all_at: str | None = None
 
 
 class SignalCfg(BaseModel):

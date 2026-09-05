@@ -224,12 +224,15 @@ manage:
   bell_no_weekend_carry: true
   bell_near_stop_fraction: 0.5
   bell_max_unprotected_pct_equity: 0.25
-  # Hard "be flat by" time. A hardcoded date is a commercial wart — this
-  # should become a rolling per-session time or be nullable; until then it
-  # is moved deliberately. Moved 3 Sep to Fri 4 Sep to test a high-volatility
-  # NFP session. The gate refuses new entries once it passes, so a stale
-  # value can no longer produce open-and-immediately-close churn.
-  flatten_all_at: "2026-09-04T15:55:00-04:00"   # Fri before close, ET
+  # Hard "be flat by" time, or null for none. The contest needed a fixed date
+  # (its EOD snapshot); a standing system does not — the bell gate decides
+  # each night whether a position may carry, and its Friday rule flattens
+  # the book before every weekend. Set a date only for a known one-off (a
+  # planned outage, a broker migration). A date in the PAST is not idle: the
+  # gate refuses every new entry once it passes, so a stale value silently
+  # stops the system trading — which is what a forgotten "2026-09-04" would
+  # have done to the observation week of 8-11 Sep.
+  flatten_all_at: null
 
 signal:
   novelty_window_hours: 72

@@ -295,13 +295,20 @@ def test_gate_refuses_entries_once_the_flatten_deadline_has_passed(bull_put):
     for nothing — the AAPL open-and-close-in-60s failure, systematised."""
     from datetime import UTC, datetime, timedelta
 
-    deadline = datetime.fromisoformat(CFG.manage.flatten_all_at)
-    after = evaluate(ctx(structure=bull_put, now=deadline + timedelta(minutes=1)), CFG)
+    deadline = datetime(2026, 9, 4, 15, 55, tzinfo=UTC)
+    dated = CFG.model_copy(update={
+        "manage": CFG.manage.model_copy(update={"flatten_all_at": deadline.isoformat()})
+    })
+    after = evaluate(ctx(structure=bull_put, now=deadline + timedelta(minutes=1)), dated)
     assert "flatten_deadline" in veto_names(after)
 
-    before = evaluate(ctx(structure=bull_put, now=deadline - timedelta(hours=1)), CFG)
+    before = evaluate(ctx(structure=bull_put, now=deadline - timedelta(hours=1)), dated)
     assert "flatten_deadline" not in veto_names(before)
 
     # no clock supplied must not veto — time checks pass rather than guess
-    assert "flatten_deadline" not in veto_names(evaluate(ctx(structure=bull_put), CFG))
+    assert "flatten_deadline" not in veto_names(evaluate(ctx(structure=bull_put), dated))
+    # and no deadline configured (the standing default) never vetoes
+    assert "flatten_deadline" not in veto_names(
+        evaluate(ctx(structure=bull_put, now=deadline + timedelta(days=30)), CFG)
+    )
     assert UTC  # silence unused-import pedantry
