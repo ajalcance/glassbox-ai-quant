@@ -103,7 +103,7 @@ def _account_checks(account) -> list[Check]:
     return checks
 
 
-def run(trading_client, market_data=None) -> Preflight:
+def run(trading_client, market_data=None, cfg=None) -> Preflight:
     """Assert the preconditions. Never raises; returns what it found."""
     checks: list[Check] = []
 
@@ -141,7 +141,51 @@ def run(trading_client, market_data=None) -> Preflight:
                 )
             )
 
+    checks.append(_macro_calendar_check(cfg))
+
     return Preflight(tuple(checks))
+
+
+def _macro_calendar_check(cfg) -> Check:
+    """Does the macro calendar still describe the future?
+
+    The calendar is hand-maintained — a deliberate choice, since four verified
+    dates beat an API nobody has exercised. The cost of that choice is that it
+    goes stale silently: the blackout simply stops matching anything, the
+    system reports no macro risk, and it looks exactly like a quiet week. It
+    held only contest-week dates for five sessions after the contest ended and
+    nothing said so.
+
+    Not fatal — a stale calendar must not stop the trader, only be visible.
+    """
+    from glassbox.clock import now_utc
+
+    if cfg is None:
+        return Check("macro_calendar", True, "not checked", fatal=False)
+    try:
+        from glassbox.macro import _parse_events
+
+        events = _parse_events(cfg)
+    except Exception as e:  # noqa: BLE001 -- a malformed calendar is the finding
+        return Check("macro_calendar", False, f"unreadable: {type(e).__name__}: {e}", fatal=False)
+
+    now = now_utc()
+    upcoming = [(at, name) for at, name in events if at > now]
+    if not upcoming:
+        latest = f", newest is {max(at for at, _ in events):%Y-%m-%d}" if events else ""
+        return Check(
+            "macro_calendar",
+            False,
+            f"STALE — {len(events)} event(s), none in the future{latest}. "
+            "The macro blackout and the bell gate's premarket lookahead are inert",
+            fatal=False,
+        )
+    at, name = upcoming[0]
+    days = (at - now).days
+    return Check(
+        "macro_calendar", True,
+        f"{len(upcoming)} upcoming, next {name} in {days}d ({at:%Y-%m-%d %H:%M %Z})",
+    )
 
 
 def main() -> int:

@@ -212,3 +212,35 @@ def test_release_before_next_open_ignores_a_print_two_sessions_out():
     assert not release_before_next_open(cfg, wednesday_bell).active
     thursday_bell = datetime(2026, 9, 3, 19, 55, tzinfo=UTC)
     assert release_before_next_open(cfg, thursday_bell).active
+
+
+def test_the_macro_calendar_still_describes_the_future():
+    """A hand-maintained calendar goes stale silently — the blackout stops
+    matching and the system reports no macro risk, which looks exactly like a
+    quiet week. It held only contest-week dates for five sessions after the
+    contest ended. This test fails the moment that recurs."""
+    from glassbox.clock import now_utc
+    from glassbox.macro import _parse_events
+
+    upcoming = [(at, name) for at, name in _parse_events(CFG) if at > now_utc()]
+    assert upcoming, (
+        "macro.events has no future entries — the blackout and the bell gate's "
+        "premarket lookahead are inert. Refresh config/default.yaml."
+    )
+
+
+def test_preflight_reports_a_stale_macro_calendar_without_blocking_the_trader():
+    from glassbox.preflight import _macro_calendar_check
+
+    stale = CFG.model_copy(update={
+        "macro": CFG.macro.model_copy(update={
+            "events": [type(CFG.macro.events[0])(at="2020-01-01T08:30:00-05:00", name="old")]
+        })
+    })
+    check = _macro_calendar_check(stale)
+    assert not check.passed and not check.fatal, "must warn, never stop the trader"
+    assert "STALE" in check.detail
+
+    healthy = _macro_calendar_check(CFG)
+    assert healthy.passed and "upcoming" in healthy.detail
+    assert _macro_calendar_check(None).passed, "not checked is not a failure"

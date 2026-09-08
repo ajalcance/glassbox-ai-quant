@@ -377,7 +377,7 @@ class Runner:
             },
         )
 
-        check = preflight.run(self.trading, self.data)
+        check = preflight.run(self.trading, self.data, self.cfg)
         for line in check.checks:
             print(line)
         self.audit.append("preflight", check.as_dict())

@@ -320,10 +320,33 @@ macro:
   blackout_after_minutes: 30
   # Sizing haircut for non-premium-selling entries inside the window.
   near_event_size_factor: 0.6
+  # Hand-maintained on purpose: a verified date beats an API nobody has
+  # exercised. The cost is that it goes stale SILENTLY — the blackout simply
+  # stops matching, the system reports no macro risk, and it looks exactly
+  # like a quiet week. It held only contest-week dates for five sessions
+  # after the contest ended and nothing said so. Preflight now fails a
+  # `macro_calendar` check when no event is in the future; when that fires,
+  # refresh this list rather than ignoring it.
+  #
+  # Confidence, because a WRONG date is worse than a missing one — it
+  # blacks out a quiet session and leaves the real print exposed:
+  #   CPI + FOMC  two independent sources agree
+  #   PPI + retail sales  one source each; PPI-before-CPI matches the
+  #                       standard BLS pattern, but verify before relying
+  # Sources: financecalendar.com, fedratecalc.com, bls.gov (Sep 2026).
   events:
     - { at: "2026-09-01T10:00:00-04:00", name: "ISM Manufacturing + JOLTS" }
     - { at: "2026-09-02T08:15:00-04:00", name: "ADP Employment" }
     - { at: "2026-09-04T08:30:00-04:00", name: "Nonfarm Payrolls" }
+    - { at: "2026-09-10T08:30:00-04:00", name: "PPI (August)" }
+    - { at: "2026-09-11T08:30:00-04:00", name: "CPI (August)" }
+    - { at: "2026-09-16T08:30:00-04:00", name: "Retail Sales (August)" }
+    # The only INTRA-SESSION event on the calendar. Every other release here
+    # prints at 08:15-10:00 ET, so its 2h window opens and closes before or
+    # around the bell. FOMC at 14:00 ET puts the blackout at 12:00-14:30 ET,
+    # squarely inside the session: the first real test of short-premium
+    # suppression while the book is live and the manager is running.
+    - { at: "2026-09-16T14:00:00-04:00", name: "FOMC decision + projections" }
 
 floor:
   # The daily best-idea floor. If nothing has traded organically by the trigger
