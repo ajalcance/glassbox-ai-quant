@@ -328,12 +328,16 @@ macro:
   # `macro_calendar` check when no event is in the future; when that fires,
   # refresh this list rather than ignoring it.
   #
-  # Confidence, because a WRONG date is worse than a missing one — it
-  # blacks out a quiet session and leaves the real print exposed:
-  #   CPI + FOMC  two independent sources agree
-  #   PPI + retail sales  one source each; PPI-before-CPI matches the
-  #                       standard BLS pattern, but verify before relying
-  # Sources: financecalendar.com, fedratecalc.com, bls.gov (Sep 2026).
+  # Every date below is verified against the agency that issues it — a WRONG
+  # date is worse than a missing one, since it blacks out a quiet session and
+  # leaves the real print exposed:
+  #   PPI            bls.gov/schedule/news_release/ppi.htm — Aug data, 10 Sep
+  #   Retail sales   census.gov MARTS release: "The August 2026 Advance
+  #                  Monthly Retail report is scheduled for release on
+  #                  September 16, 2026 at 8:30"
+  #   CPI            bls.gov CPI schedule + financecalendar.com, both 11 Sep
+  #   FOMC           fedratecalc.com + financecalendar.com, both 16 Sep 14:00
+  # Re-verify against the issuer, not an aggregator, when refreshing.
   events:
     - { at: "2026-09-01T10:00:00-04:00", name: "ISM Manufacturing + JOLTS" }
     - { at: "2026-09-02T08:15:00-04:00", name: "ADP Employment" }
