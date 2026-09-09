@@ -150,16 +150,34 @@ def main() -> int:
                 except Exception as e:  # noqa: BLE001 -- an unbuildable arm is a result
                     print(f"    {arm}: no structure — {type(e).__name__}: {e}")
                     continue
+                # Record what the chosen CONTRACTS look like, not just the
+                # order. Symbol separated the arms 3/3 vs 0/9, so the cause
+                # lives in contract selection — measure it rather than infer.
+                by_symbol = {c.symbol: c for c in chain}
+                legs = [by_symbol[l.symbol] for l in structure.legs if l.symbol in by_symbol]
+                leg_oi = [c.open_interest for c in legs]
+                leg_spread = [round(c.spread_pct_of_mid, 1) for c in legs]
+                dist_pct = round(
+                    100 * max(abs(l.strike - spot) for l in structure.legs) / spot, 2
+                ) if spot else 0.0
                 price = round(mid, 2) if adjust == 0.0 else _cross(mid, adjust)
                 sid = f"fillx-{run_id}-{rnd}-{arm}"
                 coid = client_order_id(sid, structure_key(structure))
                 coids.append(coid)
-                print(f"    {arm:14s} {structure_key(structure)[:46]:46s} "
-                      f"x{qty} @ {price:+.2f}")
+                print(f"    {arm:14s} {structure_key(structure)[:40]:40s} x{qty} @ {price:+.2f}"
+                      f"  exp={structure.expiry:%m-%d} OI={min(leg_oi) if leg_oi else '?'}"
+                      f" spread={max(leg_spread) if leg_spread else '?'}%"
+                      f" dist={dist_pct}%")
                 try:
                     router.submit_structure(structure, qty, price, coid, f"pos-{sid}")
                     submitted[arm] = (coid, price)
-                    arm_meta[arm] = {"symbol": sym, "qty": qty, "mid": round(mid, 2)}
+                    arm_meta[arm] = {
+                        "symbol": sym, "qty": qty, "mid": round(mid, 2),
+                        "expiry": f"{structure.expiry:%Y-%m-%d}",
+                        "min_leg_oi": min(leg_oi) if leg_oi else None,
+                        "max_leg_spread_pct": max(leg_spread) if leg_spread else None,
+                        "strike_distance_pct": dist_pct,
+                    }
                 except Exception as e:  # noqa: BLE001 -- a refused arm is a result
                     print(f"    {arm}: submit refused — {type(e).__name__}: {e}")
 
@@ -202,7 +220,17 @@ def main() -> int:
             times = [r["seconds_to_fill"] for r in fills if r["seconds_to_fill"] is not None]
             avg = f", median {sorted(times)[len(times) // 2]}s" if times else ""
             print(f"  {arm:14s} {len(fills)}/{len(rows)} filled{avg}")
-        print("=" * 62)
+        print("=" * 78)
+        print(f"  {'arm':14s}{'filled':>8}{'OI':>8}{'spread%':>9}{'dist%':>7}{'expiry':>12}")
+        for arm, rows in sorted(by_arm.items()):
+            f = sum(1 for r in rows if r["status"] == "filled")
+            m = rows[0]
+            print(f"  {arm:14s}{f}/{len(rows):<6}"
+                  f"{m.get('min_leg_oi', '?')!s:>8}"
+                  f"{m.get('max_leg_spread_pct', '?')!s:>9}"
+                  f"{m.get('strike_distance_pct', '?')!s:>7}"
+                  f"{m.get('expiry', '?')!s:>12}")
+        print("=" * 78)
         rates = {
             arm: sum(1 for r in rows if r["status"] == "filled") / len(rows)
             for arm, rows in by_arm.items() if rows
