@@ -74,10 +74,32 @@ sizing:
   meta_multiplier_ceiling_p: 0.85
 
 execution:
-  # Entry orders are patient but not infinite: a news thesis is time-sensitive,
-  # and an order still resting after this long is a fill the market declined at
-  # our price. It is cancelled and the position abandoned rather than chased.
+  # How long an entry may rest. BASE applies to a tight quote; the budget
+  # scales with the contract's own quoted spread up to MAX.
+  #
+  # Measured 9 Sep (soak/fill_experiment.py, identical structure, quantity and
+  # mid pricing across five underlyings): time-to-fill tracks quoted spread
+  # almost monotonically —
+  #     SPY  2.2%    5s      AAPL 2.4%  114s      ADBE 13.7%  never
+  #     QQQ  2.2%   18s      SMCI 3.5%  211s
+  # A flat 4-minute budget therefore does not separate fillable orders from
+  # unfillable ones; it TRUNCATES a distribution, and wide-quote contracts sit
+  # in the tail it cuts. Scaling the budget by the same variable that drives
+  # the wait is the change the measurement actually supports.
+  #
+  # NOT yet established, and the reason max is modest: whether an ADBE-class
+  # contract fills at ALL given longer. The experiment capped at 240s, so
+  # everything past that is extrapolation. Nor do we know whether a slow fill
+  # is a GOOD fill — an order that rests eight minutes may be filled because
+  # the market came to it, which for a credit means it moved toward our short
+  # strike. Both are open questions for the replay harness once this week's
+  # recordings exist.
   entry_fill_timeout_minutes: 4
+  entry_timeout_max_minutes: 10
+  # Quoted spread at which the budget is exactly the base. Wider scales up
+  # proportionally, narrower stays at the base — a tight quote that has not
+  # filled in four minutes is not going to.
+  entry_timeout_reference_spread_pct: 2.5
   # Bounded entry ladder (added 2 Sep, from 1 Sep's measured fill rate):
   # closes escalate until filled (1/1 filled) while entries sat at their first
   # price and died (3/7 — GOOGL, XOM, ORCL, CVX all expired untouched), with

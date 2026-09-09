@@ -40,6 +40,30 @@ def _age_seconds(row, now: datetime) -> float:
     return (now - datetime.fromisoformat(row["created_at"])).total_seconds()
 
 
+def _entry_budget_seconds(cfg, row) -> float:
+    """How long THIS entry may rest, scaled by its own quoted spread.
+
+    Fill time tracks quoted spread (measured 9 Sep: 2.2% filled in 5s, 3.5%
+    in 211s, 13.7% not at all inside four minutes), so a single budget for
+    every contract cuts the wide-quote tail off arbitrarily. A tight quote
+    keeps the base: if it has not filled in four minutes, waiting longer is
+    not what it needs.
+    """
+    ex = cfg.execution
+    base = ex.entry_fill_timeout_minutes * 60
+    cap = ex.entry_timeout_max_minutes * 60
+    reference = ex.entry_timeout_reference_spread_pct
+    if row is None or reference <= 0:
+        return base
+    try:
+        spread = float(json.loads(row["features_json"] or "{}").get("spread_pct_of_mid") or 0.0)
+    except (TypeError, ValueError):
+        return base
+    if spread <= reference:
+        return base
+    return min(cap, base * (spread / reference))
+
+
 def sync(trader, now: datetime) -> list[str]:
     """Reconcile every in-flight order against the broker. Returns event tags
     for the runner's console line."""
@@ -259,7 +283,7 @@ def _maybe_expire(trader, order, now: datetime) -> str:
         total_age = age
         if row is not None and row["opened_at"]:
             total_age = (now - datetime.fromisoformat(row["opened_at"])).total_seconds()
-        if total_age < cfg.entry_fill_timeout_minutes * 60:
+        if total_age < _entry_budget_seconds(trader.cfg, row):
             # Bounded ladder inside the budget: closes escalate until filled
             # while entries sat at their first price and died (1 Sep: 3/7
             # filled). Each elapsed step concedes one tick toward the market,

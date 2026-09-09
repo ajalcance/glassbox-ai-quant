@@ -441,3 +441,50 @@ def test_entry_ladder_will_not_rung_past_the_flatten_deadline(store, audit):
     events = lifecycle.sync(t, past)
     assert not any("ladder" in e for e in events), events
     assert store.latest_order_for(row["position_id"], "open")["client_order_id"] == before
+
+
+def test_entry_budget_scales_with_the_contracts_quoted_spread(store, audit):
+    """Measured 9 Sep: fill time tracks quoted spread (2.2% in 5s, 3.5% in
+    211s, 13.7% not at all in four minutes). A flat budget truncates that
+    distribution rather than separating fillable from unfillable."""
+    from glassbox.execution.lifecycle import _entry_budget_seconds
+
+    t = make_trader(store, audit)
+    ex = t.cfg.execution
+    base = ex.entry_fill_timeout_minutes * 60
+
+    def row(spread):
+        return {"features_json": json.dumps({"spread_pct_of_mid": spread})}
+
+    # a tight quote keeps the base — waiting longer is not what it needs
+    assert _entry_budget_seconds(t.cfg, row(1.0)) == base
+    assert _entry_budget_seconds(t.cfg, row(ex.entry_timeout_reference_spread_pct)) == base
+    # wider scales proportionally
+    assert _entry_budget_seconds(t.cfg, row(5.0)) > base
+    # and is capped, so a 30% quote does not rest all session
+    assert _entry_budget_seconds(t.cfg, row(30.0)) == ex.entry_timeout_max_minutes * 60
+    # missing or unreadable spread falls back to the base rather than guessing
+    assert _entry_budget_seconds(t.cfg, {"features_json": "{}"}) == base
+    assert _entry_budget_seconds(t.cfg, None) == base
+
+
+def test_a_wide_quote_entry_outlives_the_base_timeout(store, audit):
+    """End to end: the same order that a flat budget would have killed at four
+    minutes is still working, because its own spread earned it more time."""
+    router = NeverFillsRouter(store)
+    t, _, row = open_via_pipeline(store, audit, router=router)
+    pid = row["position_id"]
+    feats = json.loads(row["features_json"])
+    feats["spread_pct_of_mid"] = 10.0  # well past the reference
+    store.upsert_position(pid, features_json=json.dumps(feats))
+
+    just_past_base = NOW + timedelta(
+        minutes=t.cfg.execution.entry_fill_timeout_minutes, seconds=30
+    )
+    events = lifecycle.sync(t, just_past_base)
+    assert not any("expired" in e for e in events), "a wide quote gets more time"
+    assert store.get_position(pid)["status"] == "opening"
+
+    past_cap = NOW + timedelta(minutes=t.cfg.execution.entry_timeout_max_minutes, seconds=30)
+    events = lifecycle.sync(t, past_cap)
+    assert any("expired" in e for e in events), "but the cap still ends it"

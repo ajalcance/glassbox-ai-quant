@@ -47,6 +47,8 @@ class SizingCfg(BaseModel):
 
 class ExecutionCfg(BaseModel):
     entry_fill_timeout_minutes: float
+    entry_timeout_max_minutes: float
+    entry_timeout_reference_spread_pct: float
     entry_ladder_steps: int
     entry_ladder_step_seconds: float
     entry_ladder_tick: float
