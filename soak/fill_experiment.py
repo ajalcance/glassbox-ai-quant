@@ -1,25 +1,27 @@
-"""Does a mid-priced spread order ever fill, or must the limit be marketable?
+"""Why do the trader's entries expire? Vary one thing at a time and find out.
 
-The trader prices entries at the mid and fills roughly a third of the time.
-The hold probe prices to cross the natural and fills every time, on the same
-account, host and API. That is suggestive but not proof: those two differ in
-structure, symbol, size and time of day as well as in price.
+The trader fills roughly a third of its entries. This isolates the cause by
+holding everything constant except a single variable, starting from a
+baseline that fills reliably.
 
-This controls for everything except price. Same underlying, same expiry, same
-structure, submitted seconds apart:
+    --vary price     mid vs a limit crossed toward the natural
+    --vary qty       the same structure at 1, 5, 10 contracts
+    --vary symbol    the same structure across underlyings
 
-    A  mid          the price the trader actually uses
-    B  marketable   crossed toward the natural by --cross (default 35%)
+RESULT SO FAR (9 Sep, price): REFUTED. Mid and marketable both filled 3/3 in
+about five seconds. The venue does not require a crossing limit, and the
+trader's mid pricing is not why entries expire. That also corrected a wrong
+inference about the hold probe: it fills because it is SPY, quantity 1, near
+the money — not because it crosses.
 
-Both rest for the trader's own entry timeout, then both are cancelled. What
-fills, and how fast, is the measurement.
+That experiment earned its keep by PREVENTING a change. "Price entries more
+aggressively" would have paid real spread on every trade forever to fix a
+problem that does not exist.
 
-Why it matters beyond the fill rate: a paper venue generally fills only when
-price reaches the limit, while a live options market has market makers who
-routinely meet a spread order INSIDE the quoted spread. If B fills instantly
-and A never does regardless of market movement, then paper fill rate is a
-FLOOR on live fill rate, not a forecast — and "price entries more
-aggressively" would be the wrong lesson to take from paper into real money.
+Remaining candidates, none of which the raw fill data separates on its own
+(TLT filled at quantity 17 while AVGO expired at quantity 1, so it is likely
+an interaction): order size, underlying liquidity, strike distance and leg
+count. Hence one variable at a time rather than another guess.
 
 DEV ACCOUNT ONLY. It places real orders; --account must be typed out in full,
 exactly as the soak requires, and the run aborts if the credentials resolve to
@@ -82,8 +84,14 @@ def main() -> int:
     ap.add_argument("--account", required=True,
                     help="paper account this may touch; aborts on any other")
     ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--vary", default="price", choices=("price", "qty", "symbol"),
+                    help="the single variable under test; everything else is held fixed")
     ap.add_argument("--cross", type=float, default=0.35,
-                    help="how far arm B crosses toward the natural, as a fraction of mid")
+                    help="--vary price: how far the marketable arm crosses, as a fraction of mid")
+    ap.add_argument("--quantities", type=int, nargs="+", default=[1, 5, 10],
+                    help="--vary qty: contract counts to compare")
+    ap.add_argument("--symbols", nargs="+", default=["SPY", "AAPL", "ADBE"],
+                    help="--vary symbol: underlyings to compare, most liquid first")
     ap.add_argument("--kind", default="call_debit_spread")
     args = ap.parse_args()
 
@@ -108,34 +116,50 @@ def main() -> int:
 
     wait = cfg.execution.entry_fill_timeout_minutes * 60
     print(f"FILL EXPERIMENT {run_id} — account {account.account_number}")
-    print(f"  {args.rounds} rounds on {SYMBOL} {args.kind}, resting {wait:.0f}s each")
-    print(f"  arm A = mid (what the trader uses) · arm B = mid crossed {args.cross:.0%}\n")
+    print(f"  varying {args.vary.upper()} · {args.rounds} rounds · {args.kind} · "
+          f"resting {wait:.0f}s each")
+    print("  everything else held at the baseline that already fills\n")
 
     coids: list[str] = []
     results: list[dict] = []
+    arm_meta: dict[str, dict] = {}
     try:
         for rnd in range(args.rounds):
-            spot = data.spot(SYMBOL)
-            chain = data.chain(SYMBOL, horizon_hours=48)
-            if not chain:
-                print("  no tradable chain; stopping")
-                break
-            structure, mid = build_structure(
-                StructureKind(args.kind), chain, spot, 1.5, SYMBOL, cfg
-            )
-            arms = {"A_mid": round(mid, 2), "B_marketable": _cross(mid, args.cross)}
-            print(f"round {rnd}: {structure_key(structure)}")
-            print(f"  spot {spot:.2f}  mid {mid:+.2f}  ->  A {arms['A_mid']:+.2f} · "
-                  f"B {arms['B_marketable']:+.2f}")
+            # Each arm: (label, symbol, qty, price-adjust). Only the variable
+            # under test differs; everything else is held at the baseline that
+            # already fills.
+            if args.vary == "price":
+                specs = [("A_mid", SYMBOL, 1, 0.0), ("B_marketable", SYMBOL, 1, args.cross)]
+            elif args.vary == "qty":
+                specs = [(f"qty_{q:02d}", SYMBOL, q, 0.0) for q in args.quantities]
+            else:
+                specs = [(sym, sym, 1, 0.0) for sym in args.symbols]
 
+            print(f"round {rnd}:")
             submitted = {}
-            for arm, price in arms.items():
+            for arm, sym, qty, adjust in specs:
+                try:
+                    spot = data.spot(sym)
+                    chain = data.chain(sym, horizon_hours=48)
+                    if not chain:
+                        print(f"    {arm}: no tradable chain")
+                        continue
+                    structure, mid = build_structure(
+                        StructureKind(args.kind), chain, spot, 1.5, sym, cfg
+                    )
+                except Exception as e:  # noqa: BLE001 -- an unbuildable arm is a result
+                    print(f"    {arm}: no structure — {type(e).__name__}: {e}")
+                    continue
+                price = round(mid, 2) if adjust == 0.0 else _cross(mid, adjust)
                 sid = f"fillx-{run_id}-{rnd}-{arm}"
                 coid = client_order_id(sid, structure_key(structure))
                 coids.append(coid)
+                print(f"    {arm:14s} {structure_key(structure)[:46]:46s} "
+                      f"x{qty} @ {price:+.2f}")
                 try:
-                    router.submit_structure(structure, 1, price, coid, f"pos-{sid}")
+                    router.submit_structure(structure, qty, price, coid, f"pos-{sid}")
                     submitted[arm] = (coid, price)
+                    arm_meta[arm] = {"symbol": sym, "qty": qty, "mid": round(mid, 2)}
                 except Exception as e:  # noqa: BLE001 -- a refused arm is a result
                     print(f"    {arm}: submit refused — {type(e).__name__}: {e}")
 
@@ -161,7 +185,8 @@ def main() -> int:
                                 client.cancel_order_by_id(o.id)
                     print(f"    {arm}: unfilled after {wait:.0f}s — cancelled")
                 results.append({
-                    "round": rnd, "arm": arm, "limit": price, "mid": round(mid, 2),
+                    "round": rnd, "arm": arm, "limit": price,
+                    **arm_meta.get(arm, {}),
                     "status": status, "fill": fill,
                     "seconds_to_fill": round(filled_at[arm]) if arm in filled_at else None,
                 })
@@ -177,19 +202,26 @@ def main() -> int:
             times = [r["seconds_to_fill"] for r in fills if r["seconds_to_fill"] is not None]
             avg = f", median {sorted(times)[len(times) // 2]}s" if times else ""
             print(f"  {arm:14s} {len(fills)}/{len(rows)} filled{avg}")
-        a = sum(1 for r in by_arm.get("A_mid", []) if r["status"] == "filled")
-        b = sum(1 for r in by_arm.get("B_marketable", []) if r["status"] == "filled")
         print("=" * 62)
-        if b > a and a == 0:
-            print("  Mid NEVER filled while marketable always did: this venue fills only on")
-            print("  a marketable limit. Paper fill rate is a FLOOR on live, not a forecast —")
-            print("  do not carry 'price more aggressively' from paper into real money.")
-        elif a > 0 and b > 0:
-            print("  Both arms fill: price is not the whole story, and the trader's mid")
-            print("  pricing is not the reason entries expire. Look elsewhere.")
-        elif a == 0 and b == 0:
-            print("  Neither filled: the experiment is inconclusive — the market did not")
-            print("  move onto either limit. Re-run in a more active session.")
+        rates = {
+            arm: sum(1 for r in rows if r["status"] == "filled") / len(rows)
+            for arm, rows in by_arm.items() if rows
+        }
+        if not rates:
+            print("  No arm was submitted — nothing to conclude.")
+        elif all(v == 0 for v in rates.values()):
+            print(f"  NOTHING filled. Inconclusive rather than informative about {args.vary}:")
+            print("  the market moved onto no limit at all. Re-run in an active session.")
+        elif all(v == 1 for v in rates.values()):
+            print(f"  Every arm filled: {args.vary.upper()} does not explain the trader's")
+            print("  expiries either. Vary the next candidate.")
+        else:
+            best = max(rates, key=lambda k: rates[k])
+            worst = min(rates, key=lambda k: rates[k])
+            print(f"  {args.vary.upper()} SEPARATES the arms: {best} filled "
+                  f"{rates[best]:.0%} while {worst} filled {rates[worst]:.0%}.")
+            print("  This is a real difference on identical inputs otherwise — the strongest")
+            print("  lead so far. Confirm with more rounds before acting on it.")
         (workdir / "results.json").write_text(json.dumps(results, indent=2))
         print(f"\n  raw: {workdir / 'results.json'}")
     finally:
