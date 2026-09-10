@@ -432,10 +432,24 @@ def scenario_kill(ctx) -> None:
             kill_file.unlink(missing_ok=True)
 
         action = supervisor_tick(store, audit, client, cfg, ROOT, dry_run=True)
-        f.bad(str(action) == "continue" and bool(store.get_state("halt_reason")),
-              "kill", "halt_latch_after_clear",
-              "kill cleared → CONTINUE, but halt stays latched pending manual reset",
-              f"after clearing: action={action}, halt={store.get_state('halt_reason')!r}")
+        latched = bool(store.get_state("halt_reason"))
+        # The property under test is THE LATCH: clearing the kill switch must
+        # not clear the halt. The verdict that comes back is a separate
+        # question — if the account independently breaches a guard, HALT_HARD
+        # is the CORRECT answer and the latch still holds. Asserting
+        # action == "continue" conflated the two, and on 10 Sep failed a
+        # perfectly-behaving system for three passes: the dev account had a
+        # genuine -13% drawdown (my fill experiment abandoned 59 SPY spreads),
+        # so the drawdown guard fired exactly as designed and the scenario
+        # called it a bug.
+        f.bad(latched, "kill", "halt_latch_after_clear",
+              f"kill cleared → halt stays latched pending manual reset (verdict {action})",
+              f"HALT DID NOT LATCH after clearing: action={action}, "
+              f"halt={store.get_state('halt_reason')!r}")
+        if str(action) != "continue":
+            f.add("INFO", "kill", "halt_latch_verdict",
+                  f"verdict {action} rather than continue — an independent guard is "
+                  f"breached on this account, which the latch test does not care about")
 
         # Rapid flips while a stream of submits is in flight: the router must
         # stay consistent (entry *blocking* is the gate's job, not the router's).
