@@ -69,6 +69,10 @@ def _cross(mid: float, fraction: float) -> float:
     return round(mid * (1 + fraction) if mid > 0 else mid * (1 - fraction), 2)
 
 
+def _legs_of(result: dict) -> list[str]:
+    return list(result.get("legs") or [])
+
+
 def _outcome(client, coid: str) -> tuple[str, float | None]:
     from alpaca.trading.requests import GetOrdersRequest
 
@@ -177,6 +181,7 @@ def main() -> int:
                         "min_leg_oi": min(leg_oi) if leg_oi else None,
                         "max_leg_spread_pct": max(leg_spread) if leg_spread else None,
                         "strike_distance_pct": dist_pct,
+                        "legs": [leg.symbol for leg in structure.legs],
                     }
                 except Exception as e:  # noqa: BLE001 -- a refused arm is a result
                     print(f"    {arm}: submit refused — {type(e).__name__}: {e}")
@@ -253,7 +258,13 @@ def main() -> int:
         (workdir / "results.json").write_text(json.dumps(results, indent=2))
         print(f"\n  raw: {workdir / 'results.json'}")
     finally:
-        # Never leave residue: cancel anything of ours still resting.
+        # Never leave residue — and a FILLED arm is not residue that cancelling
+        # reaches. The first version of this block only cancelled resting
+        # orders, so every arm that filled left a live position behind: 59 SPY
+        # spreads accumulated across three runs on 9 Sep, -$12,767 unrealised,
+        # which dragged the dev account to a -12% drawdown and failed the
+        # soak's halt_latch_after_clear check every 15 minutes afterwards. An
+        # experiment that measures fills MUST close what it fills.
         try:
             from alpaca.trading.requests import GetOrdersRequest
 
@@ -263,6 +274,25 @@ def main() -> int:
                         client.cancel_order_by_id(o.id)
         except Exception as e:  # noqa: BLE001 -- the sweep failing IS the finding
             print(f"  cleanup sweep error (non-fatal): {type(e).__name__}: {e}")
+
+        opened = {
+            leg for r in results if r["status"] == "filled"
+            for leg in _legs_of(r)
+        }
+        if opened:
+            print(f"\n  closing {len(opened)} contract(s) this run opened...")
+            closed, failed = 0, []
+            for symbol in sorted(opened):
+                try:
+                    client.close_position(symbol)
+                    closed += 1
+                except Exception as e:  # noqa: BLE001 -- report, never silently leave it
+                    failed.append(f"{symbol}: {type(e).__name__}")
+            print(f"  closed {closed}/{len(opened)}")
+            if failed:
+                print("  STILL OPEN — close these by hand before the next soak pass:")
+                for f in failed:
+                    print(f"    {f}")
         store.close()
     return 0
 
