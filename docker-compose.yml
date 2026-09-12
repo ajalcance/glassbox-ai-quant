@@ -15,6 +15,7 @@ x-common: &common
   volumes:
     - state:/app/data
     - audit:/app/audit
+    - chains:/app/chains
     - ./models:/app/models:ro
   logging:
     driver: json-file
@@ -69,5 +70,15 @@ services:
 volumes:
   state:
   audit:
+  # Captured option chains, for the replay harness. This needs a volume for the
+  # same reason state and audit do, and not having one cost a week of data:
+  # `_capture_chain` wrote to /app/chains inside the container's writable layer,
+  # which `docker compose up -d` discards every time it replaces the container.
+  # Crash-restarts keep the layer, so the 11 Sep outage's 79 restarts were
+  # harmless — the two deploys on 12 Sep were not. Nothing failed and nothing
+  # was logged, because capture swallows its own errors by design; the files
+  # simply stopped existing. Replay reported `no_chain` and that read as "the
+  # feature is new", not as "the data is being thrown away".
+  chains:
   caddy_data:
   caddy_config:

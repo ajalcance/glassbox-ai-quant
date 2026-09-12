@@ -128,6 +128,22 @@ def snapshot_docker(workdir: Path) -> tuple[Path | None, Path | None]:
     return (db_out if db_ok else None), (audit_out if audit_ok else None)
 
 
+def chain_capture_records() -> int:
+    """How many chain snapshots the trader has written today. -1 if unknown."""
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
+    out = subprocess.run(
+        ["docker", "exec", "glassbox-trader", "sh", "-c",
+         f"wc -l < /app/chains/{day}-chains.jsonl 2>/dev/null || echo 0"],
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        return -1
+    try:
+        return int(out.stdout.strip() or 0)
+    except ValueError:
+        return -1
+
+
 def _minutes_ago(ts: str | None) -> float:
     """Age of an ISO timestamp in minutes; unparseable reads as ancient, so a
     malformed record can never make the pipeline look alive."""
@@ -546,6 +562,29 @@ class Monitor:
                    f"last supervisor log line {age:.0f}s ago" if age is not None
                    else "could not read supervisor log timestamp",
                    severity="CRITICAL")
+
+        # --- chain capture is actually landing somewhere it survives
+        #
+        # This went unnoticed for a week. `_capture_chain` wrote to /app/chains
+        # inside the container's writable layer, which `docker compose up -d`
+        # discards when it replaces the container, so every deploy silently
+        # threw the replay harness's input away. Nothing errored — capture
+        # swallows its own failures by design — and replay just said `no_chain`,
+        # which read as "the feature is new" rather than "the data is gone".
+        #
+        # An absence that produces no error needs a check that looks for
+        # presence. Only meaningful while the market is open and decisions are
+        # being made; outside the session an empty file is simply correct.
+        if self.args.source == "docker":
+            market_open = False
+            with contextlib.suppress(Exception):
+                market_open = bool(self.client.get_clock().is_open)
+            captured = chain_capture_records()
+            record("chain_capture",
+                   captured > 0 or not market_open,
+                   f"{captured} chain snapshot(s) today"
+                   + ("" if market_open else " (market closed)"),
+                   severity="WARN")
 
         # --- resource trend (endurance data): container memory + host disk
         if self.args.source == "docker":
