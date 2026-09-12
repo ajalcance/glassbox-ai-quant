@@ -118,3 +118,114 @@ def test_duplicate_news_processed_once(tmp_path):
     Runner.handle_news(runner, item)
     Runner.handle_news(runner, item)
     assert len(calls) == 1
+
+
+class LoopRunner:
+    """Exercises Runner.guarded_step and Runner.tick's heartbeat gate without
+    a broker. `tick_raises` models Alpaca returning 500 for a while."""
+
+    def __init__(self, audit, max_tick_failures=3):
+        self.audit = audit
+        self.max_tick_failures = max_tick_failures
+        self._consecutive_failures = 0
+        self.tick_raises = False
+        self.ticks = 0
+        self.polls = 0
+
+    def tick(self):
+        self.ticks += 1
+        if self.tick_raises:
+            raise RuntimeError('{"message":"Internal Server Error"}')
+
+    def poll_news(self):
+        self.polls += 1
+
+
+def test_a_failing_tick_does_not_end_the_process(tmp_path, capsys):
+    """11 Sep: an unguarded APIError from /v2/clock killed the trader 79 times
+    in 48 minutes while two live positions sat unmanaged."""
+    from glassbox.runner import Runner
+
+    runner = LoopRunner(AuditLog(tmp_path, role="trader"))
+    runner.tick_raises = True
+    for _ in range(5):
+        Runner.guarded_step(runner)  # must not raise
+    assert runner.ticks == 5, "the loop keeps running through a broker outage"
+    assert runner._consecutive_failures == 5
+
+
+def test_transient_failure_is_absorbed_and_the_counter_resets(tmp_path):
+    """A blip must not escalate. Only a persistent fault should."""
+    from glassbox.runner import Runner
+
+    runner = LoopRunner(AuditLog(tmp_path, role="trader"))
+    runner.tick_raises = True
+    Runner.guarded_step(runner)
+    Runner.guarded_step(runner)
+    assert runner._consecutive_failures == 2
+    runner.tick_raises = False
+    Runner.guarded_step(runner)
+    assert runner._consecutive_failures == 0, "recovery clears the escalation path"
+    assert runner.polls == 1, "poll_news only runs on a tick that got that far"
+
+
+def test_heartbeat_is_withheld_once_ticks_stop_completing(tmp_path):
+    """The counter has to actually reach the supervisor. A trader stamping
+    "I am fine" while every tick throws blinds the only thing left that can
+    act — worse than crashing, because then nothing escalates at all."""
+    from glassbox.reconcile import HALT_KEY
+    from glassbox.runner import Runner
+    from glassbox.store import Store
+
+    beats = []
+    runner = LoopRunner(AuditLog(tmp_path, role="trader"), max_tick_failures=3)
+    runner.store = Store(tmp_path / "s.db")
+    # Halting makes tick() return right after the heartbeat gate, so this
+    # exercises the gate itself rather than the broker calls behind it.
+    runner.store.set_state(HALT_KEY, "under test")
+    runner.trader = SimpleNamespace(heartbeat=lambda: beats.append(1))
+
+    for failures, expected in ((0, 1), (1, 2), (2, 3), (3, 3), (4, 3), (99, 3)):
+        runner._consecutive_failures = failures
+        Runner.tick(runner)
+        assert len(beats) == expected, f"after {failures} consecutive failures"
+    runner.store.close()
+
+
+def _audit_records(audit):
+    import json
+
+    return [
+        json.loads(line)
+        for path in sorted(audit.dir.glob("*.jsonl"))
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+
+
+def test_failures_are_audited_with_the_escalation_flag(tmp_path):
+    from glassbox.runner import Runner
+
+    audit = AuditLog(tmp_path, role="trader")
+    runner = LoopRunner(audit, max_tick_failures=2)
+    runner.tick_raises = True
+    Runner.guarded_step(runner)
+    Runner.guarded_step(runner)
+    errors = [r for r in _audit_records(audit) if r["kind"] == "tick_error"]
+    assert len(errors) == 2
+    assert errors[0]["heartbeat_suppressed"] is False
+    assert errors[1]["heartbeat_suppressed"] is True, "the supervisor must get its signal"
+
+
+def test_recovery_is_recorded(tmp_path):
+    """A silent recovery makes the incident impossible to reconstruct later."""
+    from glassbox.runner import Runner
+
+    audit = AuditLog(tmp_path, role="trader")
+    runner = LoopRunner(audit)
+    runner.tick_raises = True
+    Runner.guarded_step(runner)
+    runner.tick_raises = False
+    Runner.guarded_step(runner)
+    recovered = [r for r in _audit_records(audit) if r["kind"] == "tick_recovered"]
+    assert recovered and recovered[0]["after"] == 1

@@ -59,6 +59,9 @@ class ExecutionCfg(BaseModel):
     close_escalation_pct: float
     broker_connect_timeout_seconds: float
     broker_read_timeout_seconds: float
+    max_consecutive_tick_failures: int
+    broker_read_retries: int
+    broker_retry_backoff_seconds: float
 
 
 class GateCfg(BaseModel):

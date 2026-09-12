@@ -259,3 +259,74 @@ def test_chain_capture_failure_never_breaks_pricing(store):
         root=None, chain_capture_dir="/nonexistent/\0/bad",
     )
     md._capture_chain("SPY", date(2026, 9, 18), 445.0, [])  # must not raise
+
+
+# -- transient broker failures -------------------------------------------------
+# 11 Sep: Alpaca returned 500 on /v2/clock for ~48 minutes. The call had no
+# error handling, so the APIError escaped and killed the trader 79 times.
+
+
+def test_transient_server_error_is_retried():
+    from glassbox.data.market import _with_retries
+
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError('{"message":"Internal Server Error"}')
+        return "ok"
+
+    assert _with_retries(flaky, retries=2) == "ok"
+    assert len(calls) == 3
+
+
+def test_retries_are_bounded():
+    from glassbox.data.market import _with_retries
+
+    calls = []
+
+    def always_500():
+        calls.append(1)
+        raise RuntimeError('{"message":"Internal Server Error"}')
+
+    with pytest.raises(RuntimeError):
+        _with_retries(always_500, retries=2)
+    assert len(calls) == 3, "the original attempt plus two retries, then give up"
+
+
+def test_client_errors_are_not_retried():
+    """A 4xx means we asked for something wrong; asking again spends the tick
+    budget arriving at the same answer."""
+    from glassbox.data.market import _with_retries
+
+    calls = []
+
+    class Bad(Exception):
+        status_code = 422
+
+    def bad_request():
+        calls.append(1)
+        raise Bad("position intent mismatch")
+
+    with pytest.raises(Bad):
+        _with_retries(bad_request, retries=5)
+    assert len(calls) == 1
+
+
+def test_transport_errors_are_retried():
+    import httpx
+
+    from glassbox.data.market import _is_transient
+
+    assert _is_transient(httpx.ConnectTimeout("timed out"))
+    assert _is_transient(OSError("connection reset"))
+
+
+def test_rate_limit_is_treated_as_transient():
+    from glassbox.data.market import _is_transient
+
+    class Limited(Exception):
+        status_code = 429
+
+    assert _is_transient(Limited("slow down"))

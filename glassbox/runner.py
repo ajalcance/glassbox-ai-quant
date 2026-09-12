@@ -193,6 +193,8 @@ class Runner:
         )
         self._seen_news: set[str] = set()
         self._deadline = self._parse_deadline(cfg.manage.flatten_all_at)
+        self._consecutive_failures = 0
+        self.max_tick_failures = cfg.execution.max_consecutive_tick_failures
 
     @staticmethod
     def _llm():
@@ -272,7 +274,14 @@ class Runner:
 
     def tick(self) -> None:
         """Management, reconciliation, heartbeat. Runs whether or not news came."""
-        self.trader.heartbeat()
+        # The heartbeat is a claim that this process can still be trusted with
+        # live positions, so it is withheld once the ticks stop completing. A
+        # trader that keeps stamping "I am fine" while every tick throws is
+        # worse than one that crashes: it blinds the supervisor, which is the
+        # only thing left that can act. Withholding it lets the heartbeat age
+        # out and hands control over deliberately. See `run()` for the counter.
+        if self._consecutive_failures < self.max_tick_failures:
+            self.trader.heartbeat()
         try:
             from glassbox.execution import lifecycle
 
@@ -348,6 +357,55 @@ class Runner:
                     break
 
     # -- lifecycle --------------------------------------------------------
+    def guarded_step(self) -> None:
+        """One poll cycle. Failures are absorbed, counted, and escalated.
+
+        A broker that returns 500 for half an hour must not be able to end
+        this process. On 11 Sep Alpaca's /v2/clock did exactly that: the
+        APIError escaped an unguarded `market_state()` call and killed the
+        trader 79 times in 48 minutes, each restart replaying preflight while
+        two live positions sat unmanaged. The module docstring has always
+        promised that one bad event cannot take the process down; before this
+        it was only true of the individually-wrapped steps inside `tick()`.
+
+        Swallowing every error would be the opposite mistake — a trader that
+        cannot read the clock cannot manage positions, and looping quietly
+        forever would hide that from the only component able to act. So the
+        counter feeds the heartbeat (see `tick`): transient faults are
+        absorbed, persistent ones stop the heartbeat and let the supervisor
+        flatten. Crash-and-restart becomes degrade-and-escalate.
+        """
+        try:
+            self.tick()
+            self.poll_news()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 -- see above
+            self._consecutive_failures += 1
+            self.audit.append(
+                "tick_error",
+                {
+                    "error": f"{type(e).__name__}: {e}",
+                    "consecutive": self._consecutive_failures,
+                    "heartbeat_suppressed": (
+                        self._consecutive_failures >= self.max_tick_failures
+                    ),
+                },
+            )
+            print(
+                f"[{now_utc():%H:%M:%S}] tick failed "
+                f"({self._consecutive_failures}x): {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            return
+        if self._consecutive_failures:
+            self.audit.append("tick_recovered", {"after": self._consecutive_failures})
+            print(
+                f"[{now_utc():%H:%M:%S}] tick recovered after "
+                f"{self._consecutive_failures} failure(s)"
+            )
+        self._consecutive_failures = 0
+
     def run(self) -> int:
         mode = "DRY RUN (no orders)" if self.dry_run else "LIVE (paper account)"
         print(f"GlassBox trader starting — {mode}")
@@ -390,8 +448,7 @@ class Runner:
 
         try:
             while not self.stopping.is_set():
-                self.tick()
-                self.poll_news()
+                self.guarded_step()
                 self.stopping.wait(self.poll_seconds)
         except KeyboardInterrupt:
             pass

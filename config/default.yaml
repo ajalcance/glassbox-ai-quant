@@ -130,6 +130,23 @@ execution:
   broker_read_timeout_seconds: 30
   close_max_attempts: 4
   close_escalation_pct: 12   # each retry concedes this much more of the price
+  # How many ticks in a row may fail before the trader stops refreshing its
+  # heartbeat and hands control to the supervisor.
+  #
+  # From 11 Sep: Alpaca returned 500 on /v2/clock for ~48 minutes and the
+  # unguarded call killed the process 79 times. The trader now absorbs the
+  # error and retries next tick, but absorbing it FOREVER would be worse than
+  # crashing — a process that cannot read the clock cannot manage positions,
+  # and a fresh heartbeat would tell the supervisor everything is fine. At
+  # three failures (~3 min at a 60s poll) the heartbeat goes stale and the
+  # supervisor's 90s timeout takes over. Short outages ride through; real ones
+  # escalate once, cleanly, instead of 79 times.
+  max_consecutive_tick_failures: 3
+  # Session-critical broker reads (clock, calendar) retry a transient 5xx
+  # before giving up. Two extra attempts a second apart covers the blip that
+  # started the 11 Sep incident without stacking into the 60s tick budget.
+  broker_read_retries: 2
+  broker_retry_backoff_seconds: 1.0
 
 gate:
   max_orders_per_minute: 5

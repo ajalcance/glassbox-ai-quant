@@ -27,6 +27,56 @@ from glassbox.structures import LegSide, Right, Structure
 OCC = re.compile(r"^(?P<root>[A-Z]+)(?P<ymd>\d{6})(?P<right>[CP])(?P<strike>\d{8})$")
 
 
+def _is_transient(exc: Exception) -> bool:
+    """Whether a broker failure is worth trying again in a second.
+
+    Only server-side faults and transport failures qualify. A 4xx means we
+    asked for something wrong and asking again changes nothing — retrying it
+    would just spend the tick budget arriving at the same answer.
+    """
+    import httpx
+
+    if isinstance(exc, (httpx.TransportError, OSError)):
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status >= 500 or status == 429
+    # alpaca-py's APIError stringifies its payload and loses the status code,
+    # so the message is the only signal left for the exact failure that took
+    # the trader down 79 times on 11 Sep.
+    text = str(exc).lower()
+    return "internal server error" in text or "service unavailable" in text
+
+
+def _with_retries(produce, retries: int):
+    """Call `produce`, retrying transient broker failures with a flat backoff."""
+    import time
+
+    attempt = 0
+    while True:
+        try:
+            return produce()
+        except Exception as e:
+            attempt += 1
+            if attempt > retries or not _is_transient(e):
+                raise
+            time.sleep(_retry_backoff())
+
+
+def _retry_backoff() -> float:
+    from glassbox.config import load_config
+
+    return load_config().execution.broker_retry_backoff_seconds
+
+
+def _read_retries() -> int:
+    from glassbox.config import load_config
+
+    return load_config().execution.broker_read_retries
+
+
 def parse_occ(symbol: str) -> tuple[str, date, Right, float]:
     """Decode an OCC option symbol: AAPL260918C00230000."""
     m = OCC.match(symbol)
@@ -68,11 +118,11 @@ class MarketData:
             self.models_dir = Path(__file__).resolve().parents[2] / "models"
 
     # -- caching ----------------------------------------------------------
-    def _cached(self, key, ttl: float, produce):
+    def _cached(self, key, ttl: float, produce, retries: int = 0):
         hit = self._cache.get(key)
         if hit and (now_utc() - hit.at).total_seconds() < ttl:
             return hit.value
-        value = produce()
+        value = _with_retries(produce, retries)
         self._cache[key] = _Cached(value, now_utc())
         return value
 
@@ -503,6 +553,7 @@ class MarketData:
             ("session", market_date()),
             self.bar_ttl,
             lambda: fetch_session(self.trading_client),
+            retries=_read_retries(),
         )
 
     # -- session ----------------------------------------------------------
@@ -512,4 +563,12 @@ class MarketData:
         return (self.root / KILL_SWITCH_FILE).exists()
 
     def clock(self):
-        return self._cached(("clock",), 30.0, self.trading_client.get_clock)
+        """Market clock. Retried, because every tick is gated on it.
+
+        This is the single call whose failure stops all management work, so a
+        momentary 500 here is worth a second attempt before the tick is
+        abandoned — the 11 Sep outage is the reason the parameter exists.
+        """
+        return self._cached(
+            ("clock",), 30.0, self.trading_client.get_clock, retries=_read_retries()
+        )
