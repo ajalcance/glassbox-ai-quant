@@ -23,6 +23,7 @@ from glassbox.chain import (
     atm_straddle_mid,
     build_structure,
     structure_liquidity,
+    structure_round_trip_cost,
 )
 from glassbox.execution.ids import client_order_id
 from glassbox.gate import GateContext, evaluate
@@ -445,9 +446,12 @@ class Trader:
             correlations=self.data.correlations(),
             spread_pct_of_mid=spread_pct,
             open_interest=oi,
+            entry_price=net_price,
+            round_trip_cost=structure_round_trip_cost(structure, chain),
             orders_last_minute=market.orders_last_minute,
             new_positions_today=market.new_positions_today,
             duplicate_open=self.has_duplicate(structure),
+            held_legs=self.held_legs(),
             corporate_blackout=blackout,
             macro_window=macro_window,
             now=self.clock(),
@@ -931,6 +935,21 @@ class Trader:
             for r in self.store.open_positions()
             if r["underlying"] == structure.underlying
         )
+
+    def held_legs(self) -> dict[str, str]:
+        """Every option contract currently on or going on, and which side.
+
+        Keyed by OCC symbol across ALL positions, not just this underlying:
+        the broker nets by contract, so that is the unit that matters. A
+        contract held on both sides at once cannot happen — the gate's
+        leg_conflict check refuses to create one — so last-write-wins here is
+        recording a state that is already unique.
+        """
+        held: dict[str, str] = {}
+        for row in self.store.open_positions():
+            for leg in json.loads(row["legs_json"] or "[]"):
+                held[leg["symbol"]] = leg["side"]
+        return held
 
     @staticmethod
     def _legs_json(structure) -> str:

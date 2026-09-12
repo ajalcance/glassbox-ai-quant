@@ -2,6 +2,8 @@
 exhaustively — including the property that matters most: no combination of
 inputs approves an undefined-risk structure."""
 
+from datetime import date
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -9,9 +11,11 @@ from hypothesis import strategies as st
 from glassbox.config import load_config
 from glassbox.gate import CHECKS, GateContext, evaluate
 from glassbox.portfolio import Greeks, PortfolioState
+from glassbox.structures import Right
 from tests.conftest import make_bull_put, make_naked_put
 
 CFG = load_config()
+EXPIRY = date(2026, 9, 18)
 
 
 def ctx(**overrides) -> GateContext:
@@ -312,3 +316,98 @@ def test_gate_refuses_entries_once_the_flatten_deadline_has_passed(bull_put):
         evaluate(ctx(structure=bull_put, now=deadline + timedelta(days=30)), CFG)
     )
     assert UTC  # silence unused-import pedantry
+
+
+# -- leg overlap ---------------------------------------------------------------
+# `duplicate` compares whole-structure identity, which is blind to two spreads
+# that share one contract. The broker is not blind to it: it nets by contract.
+
+
+def test_opposite_side_of_a_held_leg_is_refused(bull_put):
+    """The exact rejection Alpaca returned three times, most recently 11 Sep:
+    an ORCL 150/148 put spread proposed while we were short that 148 put —
+    `position intent mismatch, inferred: buy_to_close, specified: buy_to_open`.
+    An order the broker will always reject should never leave the building."""
+    held = {"SPY260918P00435000": "short"}  # we hold the long leg, short
+    d = evaluate(ctx(structure=bull_put, held_legs=held), CFG)
+    assert not d.approved and "leg_conflict" in veto_names(d)
+    assert "opposite side" in next(c for c in d.vetoes if c.name == "leg_conflict").detail
+
+
+def test_same_side_of_a_held_leg_is_refused(bull_put):
+    """9 Sep: an AAPL iron condor and a bull put spread that was exactly its put
+    wing ran side by side. No limit breached, but the heat number understated
+    what was actually on, because position-level accounting counted two
+    unrelated positions where one strike carried double."""
+    held = {"SPY260918P00440000": "short"}
+    d = evaluate(ctx(structure=bull_put, held_legs=held), CFG)
+    assert not d.approved and "leg_conflict" in veto_names(d)
+    assert "already held" in next(c for c in d.vetoes if c.name == "leg_conflict").detail
+
+
+def test_unrelated_held_legs_do_not_block(bull_put):
+    """Two spreads on the same underlying at different strikes remain fine."""
+    held = {"SPY260918P00400000": "short", "AAPL260918C00230000": "long"}
+    d = evaluate(ctx(structure=bull_put, held_legs=held), CFG)
+    assert d.approved, [c.detail for c in d.vetoes]
+
+
+def test_no_held_legs_passes(bull_put):
+    d = evaluate(ctx(structure=bull_put, held_legs={}), CFG)
+    assert d.approved and "leg_conflict" not in veto_names(d)
+
+
+# -- cost to trade -------------------------------------------------------------
+# Every other check asks whether a trade is too risky. This one asks whether it
+# can make money at all.
+
+
+def test_target_below_the_round_trip_cost_is_refused(bull_put):
+    """11 Sep, ORCL 148/146: $52 credit, $26 target, ~$21 to get on and off.
+    Marked -$21 on its first tick, never traded above -$7 in 56 minutes."""
+    d = evaluate(ctx(structure=bull_put, entry_price=-0.52, round_trip_cost=21.0), CFG)
+    assert not d.approved and "cost_to_trade" in veto_names(d)
+    assert "no path to profit" in next(c for c in d.vetoes if c.name == "cost_to_trade").detail
+
+
+def test_comfortable_credit_passes(bull_put):
+    """ORCL 155/152.5 the same morning: $105 credit, $52 target, ~$26 cost."""
+    d = evaluate(ctx(structure=bull_put, entry_price=-1.05, round_trip_cost=26.0), CFG)
+    assert d.approved, [c.detail for c in d.vetoes]
+
+
+def test_debit_structures_use_their_own_take_profit(bull_put):
+    """QQQ 715/705: $211 debit, 100% target, ~$14 cost — 15x clear."""
+    d = evaluate(ctx(structure=bull_put, entry_price=2.11, round_trip_cost=14.0), CFG)
+    assert d.approved, [c.detail for c in d.vetoes]
+
+
+def test_unpriceable_cost_is_not_treated_as_free(bull_put):
+    """A zero cost means the quotes could not price the round trip. The
+    liquidity check owns that decision; this one must not duplicate it."""
+    d = evaluate(ctx(structure=bull_put, entry_price=-0.52, round_trip_cost=0.0), CFG)
+    result = next(c for c in d.checks if c.name == "cost_to_trade")
+    assert result.passed and "not priceable" in result.detail
+
+
+def test_round_trip_cost_sums_leg_spreads():
+    from glassbox.chain import ContractQuote, structure_round_trip_cost
+    from tests.conftest import make_bull_put
+
+    s = make_bull_put()
+    chain = [
+        ContractQuote("SPY260918P00440000", Right.PUT, 440, EXPIRY, bid=2.30, ask=2.45),
+        ContractQuote("SPY260918P00435000", Right.PUT, 435, EXPIRY, bid=1.10, ask=1.16),
+    ]
+    assert structure_round_trip_cost(s, chain) == pytest.approx(0.15 * 100 + 0.06 * 100)
+
+
+def test_round_trip_cost_is_unknown_when_a_leg_is_missing():
+    """An unpriced leg must not report the structure as cheaper than it is."""
+    from glassbox.chain import ContractQuote, structure_round_trip_cost
+    from tests.conftest import make_bull_put
+
+    chain = [
+        ContractQuote("SPY260918P00440000", Right.PUT, 440, EXPIRY, bid=2.30, ask=2.45)
+    ]
+    assert structure_round_trip_cost(make_bull_put(), chain) == 0.0

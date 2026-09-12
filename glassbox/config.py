@@ -78,6 +78,7 @@ class GateCfg(BaseModel):
     max_positions_per_underlying: int
     max_correlated_positions: int
     correlation_threshold: float
+    min_target_to_cost_ratio: float
 
 
 class ManageCfg(BaseModel):

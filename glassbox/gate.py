@@ -60,10 +60,18 @@ class GateContext:
     # --- liquidity --------------------------------------------------------
     spread_pct_of_mid: float = 0.0
     open_interest: int = 0
+    # Intended net price per spread, signed: + debit paid, - credit received.
+    entry_price: float = 0.0
+    # Dollar bid-ask cost of one round trip in this structure. 0.0 means the
+    # quotes could not price it, which the check treats as unknown, not free.
+    round_trip_cost: float = 0.0
     # --- rate limiting ----------------------------------------------------
     orders_last_minute: int = 0
     new_positions_today: int = 0
     duplicate_open: bool = False
+    # Option symbol -> side ("long"/"short") we already hold, across every open
+    # position. Empty means "nothing held", which is also the safe default.
+    held_legs: dict[str, str] = field(default_factory=dict)
     # --- corporate actions ------------------------------------------------
     # None means "not checked". The gate treats that as a pass and says so,
     # rather than silently implying the security was cleared.
@@ -385,6 +393,93 @@ def _check_duplicate(ctx, cfg) -> CheckResult:
     return CheckResult("duplicate", True, "no duplicate")
 
 
+def _check_leg_conflict(ctx, cfg) -> CheckResult:
+    """Refuse a structure that reuses an option contract we already hold.
+
+    `duplicate` above compares whole-structure identity, so two spreads that
+    share ONE contract look unrelated to it. They are not unrelated to the
+    broker, which nets by contract, and they are not unrelated to risk:
+
+      * Opposite sides of the same contract cancel at the broker. Alpaca
+        rejects the order outright — `position intent mismatch, inferred:
+        buy_to_close, specified: buy_to_open`. Seen live three times now, most
+        recently 11 Sep when an ORCL 150/148 put spread was proposed while we
+        were already short that 148 put. An order the broker will always
+        reject should never leave the building.
+
+      * The same side of the same contract doubles that strike's exposure
+        while the position-level accounting still counts two independent
+        positions. On 9 Sep an AAPL iron condor and a bull put spread that was
+        exactly its put wing ran side by side: no limit was breached, but the
+        heat number understated what was actually on.
+
+    Both are vetoes. A leg we already hold is a leg this structure cannot use.
+    """
+    if not ctx.held_legs:
+        return CheckResult("leg_conflict", True, "no legs held")
+    opposed, shared = [], []
+    for leg in ctx.structure.legs:
+        held = ctx.held_legs.get(leg.symbol)
+        if held is None:
+            continue
+        (shared if held == str(leg.side) else opposed).append(leg.symbol)
+    if opposed:
+        return CheckResult(
+            "leg_conflict",
+            False,
+            f"{', '.join(sorted(opposed))} held on the opposite side — broker would net it",
+        )
+    if shared:
+        return CheckResult(
+            "leg_conflict", False, f"{', '.join(sorted(shared))} already held on this side"
+        )
+    return CheckResult("leg_conflict", True, f"no overlap with {len(ctx.held_legs)} held leg(s)")
+
+
+def _check_cost_to_trade(ctx, cfg) -> CheckResult:
+    """Refuse a structure whose profit target does not clear its own bid-ask.
+
+    Every other check asks whether the trade is too RISKY. This one asks
+    whether it can make money at all. Edge is estimated against the vol
+    forecast and never had the cost of execution subtracted, so a structure
+    could be approved on a real forecast and still have no path to profit.
+
+    11 Sep is the clean example. An ORCL 148/146 bull put took in $52 of
+    credit against a 50% profit target of $26, and its round trip cost about
+    $21. It was marked -$21 on its first tick and never once traded above
+    -$7 in 56 minutes of management. The forecast was fine; the trade was
+    unprofitable by construction before the market did anything.
+
+    The threshold is a floor, not an optimum — it is set to catch the
+    indefensible case (a target barely above the cost of getting the position
+    on and off), not to express a view about which trades are worth doing.
+    """
+    cost = ctx.round_trip_cost
+    if cost <= 0 or not ctx.entry_price:
+        # Unpriceable quotes. The liquidity check above is the one that
+        # decides whether a contract we cannot price is tradable at all;
+        # inventing a cost here would duplicate it and get it wrong.
+        return CheckResult("cost_to_trade", True, "round-trip cost not priceable")
+    take = (
+        cfg.manage.credit_profit_take_pct
+        if ctx.entry_price < 0
+        else cfg.manage.debit_profit_take_pct
+    )
+    target = abs(ctx.entry_price) * (take / 100) * 100
+    required = cfg.gate.min_target_to_cost_ratio
+    ratio = target / cost
+    if ratio < required:
+        return CheckResult(
+            "cost_to_trade",
+            False,
+            f"target ${target:,.0f} is {ratio:.2f}x the ${cost:,.0f} round-trip cost, "
+            f"below {required:.2f}x — no path to profit after costs",
+        )
+    return CheckResult(
+        "cost_to_trade", True, f"target ${target:,.0f} is {ratio:.2f}x round-trip cost"
+    )
+
+
 CHECKS: tuple[Callable, ...] = (
     _check_kill_switch,
     _check_halted,
@@ -405,6 +500,8 @@ CHECKS: tuple[Callable, ...] = (
     _check_macro_blackout,
     _check_corporate_action,
     _check_duplicate,
+    _check_leg_conflict,
+    _check_cost_to_trade,
 )
 
 

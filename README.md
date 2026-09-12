@@ -64,7 +64,7 @@ News arrives on Alpaca's real-time stream. A deterministic filter kills ~95% of 
 
 > **Is the move I expect bigger or smaller than the move the options are already pricing?**
 
-That comparison — expected move vs. IV-implied move — is the signal. A meta-labeler (regularised logistic regression, trained on the agent's own past trades) scores how much to trust it. A contextual bandit (Thompson sampling) picks which defined-risk options structure fits the regime. A non-bypassable 19-check risk gate approves or vetoes. Every step is written to a hash-chained audit log.
+That comparison — expected move vs. IV-implied move — is the signal. A meta-labeler (regularised logistic regression, trained on the agent's own past trades) scores how much to trust it. A contextual bandit (Thompson sampling) picks which defined-risk options structure fits the regime. A non-bypassable 21-check risk gate approves or vetoes. Every step is written to a hash-chained audit log.
 
 **The governing invariant:** *ML sets selection and sizing. Deterministic code sets limits.* A model failure degrades to "sized too small" — never to "lost the account."
 
@@ -77,7 +77,7 @@ Alpaca news stream (WebSocket)
           └─ EDGE TEST: expected move vs IV-implied move (ATM straddle)
               └─ meta-labeler P(profit) → position size
                   └─ bandit selects defined-risk structure (6 arms)
-                      └─ RISK GATE (19 checks, pure function, can veto)
+                      └─ RISK GATE (21 checks, pure function, can veto)
                           └─ idempotent multi-leg execution (client_order_id, circuit breaker)
                               └─ trade manager: 11 severity-ordered barriers
                                   └─ hash-chained audit log ──→ retrains meta-labeler + bandit

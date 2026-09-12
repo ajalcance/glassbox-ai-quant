@@ -301,3 +301,30 @@ def structure_liquidity(structure: Structure, chain: list[ContractQuote]) -> tup
     if not quotes:
         return float("inf"), 0
     return max(q.spread_pct_of_mid for q in quotes), min(q.open_interest for q in quotes)
+
+
+def structure_round_trip_cost(structure: Structure, chain: list[ContractQuote]) -> float:
+    """Dollar cost of getting into and back out of one spread, from the quotes.
+
+    Entering near the mid and exiting on liquidation-side marks — long legs at
+    the bid, short legs at the ask, which is what `manage` already does — pays
+    roughly half of each leg's spread on the way in and half on the way out.
+    Summed across the legs that is one full spread per leg, per round trip.
+
+    Measured against the live record this is close: on 11 Sep the ORCL 148/146
+    bull put's first mark after fill was -$21 on a $52 credit, and the QQQ
+    715/705 debit's was -$14. That number is the round trip, showing up
+    immediately as an unrealised loss because it was never recoverable.
+
+    Returns 0.0 when a leg is missing from the chain — an unknown cost is not
+    reported as a free one, but the caller can tell the difference from a
+    genuinely costless structure (there are none) and treats 0 as "unknown".
+    """
+    by_symbol = {c.symbol: c for c in chain}
+    total = 0.0
+    for leg in structure.legs:
+        quote = by_symbol.get(leg.symbol)
+        if quote is None or quote.ask <= quote.bid:
+            return 0.0
+        total += (quote.ask - quote.bid) * 100 * leg.ratio_qty
+    return total

@@ -2,7 +2,7 @@
 
 > **Historical document.** This is the plan as written before the contest, kept
 > unedited as a record of intent. Where it and the code disagree, the code and
-> the README are current: the gate grew to 19 checks, the triple barrier became
+> the README are current: the gate grew to 21 checks, the triple barrier became
 > eleven severity-ordered barriers, and R was raised, reverted and restored.
 > Outcomes are in the README.
 

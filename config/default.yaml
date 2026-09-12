@@ -199,6 +199,44 @@ gate:
   # Pairwise correlation at or above which two underlyings count as the same
   # bet for the check above.
   correlation_threshold: 0.7
+  # The profit target must be at least this multiple of the structure's own
+  # round-trip bid-ask cost, or the trade has no path to profit after costs.
+  #
+  # Every other check asks whether a trade is too risky. This one asks whether
+  # it can make money at all — edge is estimated against the vol forecast and
+  # never had execution cost subtracted from it.
+  #
+  # Measured across every position that filled, 1-11 Sep, using the first
+  # manage mark after each fill as the observed round-trip cost — that mark IS
+  # the round trip, appearing immediately as unrealised loss before the market
+  # has done anything. Sorted by target/cost:
+  #
+  #     ratio   position          entry    cost   target   realised
+  #     0.21    WMT bull put      -0.32     $75      $16      -$115
+  #     0.27    AAPL condor       -1.65    $306      $82      -$306
+  #     0.84    TLT call debit    +0.27     $32      $27      -$144
+  #     1.24    ORCL 148/146      -0.52     $21      $26   (flattened)
+  #     1.37    AMZN condor       -1.51     $55      $76      -$125
+  #     ---------------------------------------------- 1.5x ----
+  #     1.84    AAPL condor       -0.59     $16      $30       -$16
+  #     2.02    ORCL 155/152.5    -1.05     $26      $52       -$25
+  #     ...     (8 more, ratios 2.2x to 62x)
+  #     999     TLT call debit    +0.23      $0      $23       +$85
+  #
+  #   below 1.5x:  4 closed, net -$690 — every one a loss
+  #   at/above:   12 closed, net +$125
+  #
+  # The separation is not a pattern found by sorting. A profit target below
+  # the cost of getting on and off is unprofitable by arithmetic, whatever the
+  # forecast does. Note the -$306 AAPL condor of 3 Sep sits at 0.27x: the two
+  # barrier bugs fixed in 362cba2 were real, and this says the trade had no
+  # path to profit even without them.
+  #
+  # 1.5 is a FLOOR, not an optimum. n=18 is small, the cost proxy includes up
+  # to 60s of market movement, and only filled positions appear. The honest
+  # read is "below ~1.4 always lost"; 1.5 is the conservative side of that.
+  # Calibrating it properly is a replay-harness question on a larger sample.
+  min_target_to_cost_ratio: 1.5
 
 manage:
   # Credit structures: bank half the premium rather than grinding the last of it
