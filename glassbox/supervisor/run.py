@@ -139,6 +139,29 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
         )
         return verdict.action
 
+    # A breach we have already acted on is not a new breach. On 11 Sep the
+    # trader's heartbeat stayed stale while it crash-looped, so this fired
+    # eight times in two minutes: eight guard_breach records, eight flatten
+    # records, seven of which closed nothing because the first pass had
+    # already emptied the book. Re-auditing an unchanged condition buries the
+    # one record that matters and re-hits the broker for no reason.
+    #
+    # Escalation still works: a DIFFERENT reason (drawdown blowing through
+    # while halted on heartbeat) is a new breach and acts again. And inventory
+    # that reappears under a standing halt is re-flattened, because the halt's
+    # promise is an empty book, not a written-down flag.
+    if store.get_state(HALT_KEY) == verdict.reason:
+        residue = [] if dry_run else list(client.get_all_positions() or [])
+        if residue:
+            print(
+                f"standing halt, but {len(residue)} position(s) reappeared — re-flattening",
+                file=sys.stderr,
+            )
+            flatten_all(client, audit)
+        else:
+            print(f"[{now_utc():%H:%M:%S}] halted — {verdict.reason}")
+        return verdict.action
+
     audit.append(
         "guard_breach",
         {

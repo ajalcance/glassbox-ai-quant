@@ -58,44 +58,102 @@ def test_peak_equity_ratchets_up_only(store):
     assert update_peak_equity(store, 99_000) == 105_000, "peak must not fall"
 
 
-def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys, monkeypatch):
-    """Under a restart policy, exiting on a hard halt produces a crash loop that
-    re-flattens every few seconds and reads as a broken system. The supervisor
-    must stay alive and keep watching instead."""
-    from glassbox.supervisor import run as supervisor_run
+class _HaltFakeAccount:
+    equity = "100000"
 
-    class FakeAccount:
-        equity = "100000"
 
-    class FakeClient:
-        def __init__(self):
-            self.flattens = 0
+class _HaltFakeClient:
+    """A broker whose book can be told to refill, to test re-flattening."""
 
-        def get_account(self):
-            return FakeAccount()
+    def __init__(self, positions=()):
+        self.flattens = 0
+        self._positions = list(positions)
 
-        def cancel_orders(self):
-            self.flattens += 1
-            return []
+    def get_account(self):
+        return _HaltFakeAccount()
 
-        def close_all_positions(self, cancel_orders=True):
-            return []
+    def cancel_orders(self):
+        self.flattens += 1
+        return []
 
-        def get_all_positions(self):
-            return []
+    def close_all_positions(self, cancel_orders=True):
+        self._positions = []
+        return []
 
-    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    def get_all_positions(self):
+        return list(self._positions)
 
+
+def _engage_kill_switch(tmp_path):
     from glassbox.supervisor.guards import KILL_SWITCH_FILE
 
     kill = tmp_path / KILL_SWITCH_FILE
     kill.parent.mkdir(parents=True, exist_ok=True)
     kill.touch()
-    client = FakeClient()
+
+
+def test_hard_halt_is_reported_once_not_looped(store, audit, tmp_path, capsys, monkeypatch):
+    """Under a restart policy, exiting on a hard halt produces a crash loop that
+    re-flattens every few seconds and reads as a broken system. The supervisor
+    must stay alive and keep watching instead.
+
+    Staying alive is not the same as re-acting. An unchanged breach is flattened
+    once; the later ticks keep watching and keep reporting the halt. On 11 Sep
+    the unchanged version fired eight times in two minutes against an already
+    empty book.
+    """
+    from glassbox.supervisor import run as supervisor_run
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    _engage_kill_switch(tmp_path)
+    client = _HaltFakeClient()
     for _ in range(3):
         action = supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
-        assert action is GuardAction.HALT_HARD
-    assert client.flattens == 3, "each tick flattens; the loop must not exit"
+        assert action is GuardAction.HALT_HARD, "the supervisor must keep watching, not exit"
+    assert client.flattens == 1, "an unchanged breach is acted on once, not every tick"
+
+
+def test_standing_halt_reflattens_when_inventory_reappears(store, audit, tmp_path, monkeypatch):
+    """Skipping the repeat flatten must not become "never flatten again".
+
+    The halt's promise is an empty book, not a written-down flag. If anything
+    is on the book under a standing halt, it goes — however it got there.
+    """
+    from glassbox.supervisor import run as supervisor_run
+
+    class Pos:
+        symbol = "AAPL260918C00230000"
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    _engage_kill_switch(tmp_path)
+    client = _HaltFakeClient()
+
+    supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+    assert client.flattens == 1
+
+    supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+    assert client.flattens == 1, "empty book under a standing halt needs no action"
+
+    client._positions = [Pos()]
+    supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+    assert client.flattens == 2, "inventory under a standing halt must be flattened again"
+
+
+def test_new_breach_reason_acts_again(store, audit, tmp_path, monkeypatch):
+    """A worse breach while already halted is a new breach, not an echo."""
+    from glassbox.reconcile import HALT_KEY
+    from glassbox.supervisor import run as supervisor_run
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    _engage_kill_switch(tmp_path)
+    client = _HaltFakeClient()
+
+    supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+    assert client.flattens == 1
+
+    store.set_state(HALT_KEY, "something else entirely")
+    supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+    assert client.flattens == 2, "a changed reason is a fresh breach and must act"
 
 
 def test_flatten_retries_until_spread_legs_are_gone(audit, monkeypatch):
