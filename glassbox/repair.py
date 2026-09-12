@@ -35,6 +35,7 @@ from datetime import datetime
 
 REPAIR_BARRIER = "supervisor_flatten"
 REPAIRABLE_STATUSES = ("open", "opening", "closing")
+AUDIT_ROLE = "repair"
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +274,14 @@ def _cli() -> int:
         print("nothing to write")
         return 1
 
-    audit = AuditLog(cfg.paths.audit_dir, role="trader")
+    # Its own role, like every other out-of-process tool. Each role owns
+    # `YYYY-MM-DD-<role>.jsonl` exclusively (see audit.py), and this runs while
+    # the trader is live: sharing the file forks the hash chain, because two
+    # writers each chain from the last record THEY wrote. Done exactly once, on
+    # 12 Sep, by this CLI. The fork stands in that day's file — a broken chain
+    # is evidence, and editing it to look clean is the one thing the chain
+    # exists to make impossible.
+    audit = AuditLog(cfg.paths.audit_dir, role=AUDIT_ROLE)
     written = apply(store, audit, resolutions, now_utc())
     store.close()
     print(f"wrote {written} exit(s)")

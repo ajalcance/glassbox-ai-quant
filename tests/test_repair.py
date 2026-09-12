@@ -229,3 +229,71 @@ def test_repaired_exit_agrees_with_the_live_close_formula():
     (r,) = plan([row()], {}, QQQ_FILLS)
     lifecycle_formula = (-r.close_price - entry) * 100 * qty
     assert r.realized_pnl == pytest.approx(lifecycle_formula)
+
+
+def test_repair_writes_to_its_own_audit_role(tmp_path):
+    """Each role owns its day file exclusively (audit.py). This CLI runs while
+    the trader is live, so sharing `role="trader"` forks the hash chain — two
+    writers each chaining from the last record THEY wrote. Done exactly once,
+    on 12 Sep, by this module."""
+    from glassbox.audit import AuditLog
+    from glassbox.repair import AUDIT_ROLE
+    from glassbox.store import Store
+
+    assert AUDIT_ROLE != "trader"
+
+    store = Store(tmp_path / "s.db")
+    store.upsert_position(
+        "pos-QQQ-1",
+        signal_id="QQQ-1",
+        underlying="QQQ",
+        kind="put_debit_spread",
+        legs_json=row()["legs_json"],
+        qty=1,
+        entry_price=2.11,
+        max_loss=211.0,
+        status="open",
+        opened_at=row()["opened_at"],
+    )
+    trader_audit = AuditLog(tmp_path, role="trader")
+    trader_audit.append("trader_start", {})
+
+    apply(store, AuditLog(tmp_path, role=AUDIT_ROLE), plan(store.open_positions(), {}, QQQ_FILLS),
+          CLOSED_AT)
+
+    trader_files = list(tmp_path.glob("*-trader.jsonl"))
+    assert len(trader_files) == 1
+    kinds = [json.loads(line)["kind"] for line in trader_files[0].read_text().splitlines()]
+    assert kinds == ["trader_start"], "the repair must not append to the trader's chain"
+    assert list(tmp_path.glob(f"*-{AUDIT_ROLE}.jsonl")), "it needs a file of its own"
+    store.close()
+
+
+def test_both_chains_verify_after_a_repair(tmp_path):
+    """The point of the separate role: neither chain breaks."""
+    from glassbox.audit import AuditLog, verify_day
+    from glassbox.repair import AUDIT_ROLE
+    from glassbox.store import Store
+
+    store = Store(tmp_path / "s.db")
+    store.upsert_position(
+        "pos-QQQ-1",
+        signal_id="QQQ-1",
+        underlying="QQQ",
+        kind="put_debit_spread",
+        legs_json=row()["legs_json"],
+        qty=1,
+        entry_price=2.11,
+        max_loss=211.0,
+        status="open",
+        opened_at=row()["opened_at"],
+    )
+    trader_audit = AuditLog(tmp_path, role="trader")
+    trader_audit.append("trader_start", {})
+    apply(store, AuditLog(tmp_path, role=AUDIT_ROLE), plan(store.open_positions(), {}, QQQ_FILLS),
+          CLOSED_AT)
+    trader_audit.append("manage", {"position_id": "pos-QQQ-1"})
+
+    ok, _total, broken = verify_day(tmp_path)
+    assert ok, broken
+    store.close()
