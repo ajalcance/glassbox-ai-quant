@@ -576,14 +576,18 @@ class Monitor:
         # presence. Only meaningful while the market is open and decisions are
         # being made; outside the session an empty file is simply correct.
         if self.args.source == "docker":
-            market_open = False
-            with contextlib.suppress(Exception):
-                market_open = bool(self.client.get_clock().is_open)
+            # Gated on analyst reads, not on the clock. Capture only happens
+            # when a decision fetches a chain, so "market open and zero
+            # snapshots" is false at 09:31 every single day — and a check that
+            # cries wolf each morning is one you stop reading, which is exactly
+            # how the original failure survived a week. Tying it to the causal
+            # condition means it is silent until capture has actually had work
+            # to do, and unambiguous the moment it has.
+            reads = sum(1 for r in recent_audit if r.get("kind") == "analyst_view")
             captured = chain_capture_records()
             record("chain_capture",
-                   captured > 0 or not market_open,
-                   f"{captured} chain snapshot(s) today"
-                   + ("" if market_open else " (market closed)"),
+                   captured > 0 or reads == 0,
+                   f"{captured} chain snapshot(s) against {reads} analyst read(s) today",
                    severity="WARN")
 
         # --- resource trend (endurance data): container memory + host disk
