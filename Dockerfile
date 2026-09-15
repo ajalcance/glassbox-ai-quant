@@ -22,8 +22,14 @@ COPY models/ ./models/
 
 # Never run as root: a container that can rewrite its own code is a larger
 # blast radius than this workload needs.
+# Every path that gets a named volume must exist here, owned by the app user.
+# Docker seeds a new volume from the image's directory — contents AND ownership
+# — but only when that directory exists; otherwise it creates an empty one
+# owned by root, which this container (uid 10001) cannot write. /app/chains was
+# missing from this list on 12 Sep, so chain capture silently failed all of
+# Monday's session: the volume was mounted, correct, and unwritable.
 RUN useradd --create-home --uid 10001 glassbox \
-    && mkdir -p /app/data /app/audit \
+    && mkdir -p /app/data /app/audit /app/chains \
     && chown -R glassbox:glassbox /app
 USER glassbox
 
