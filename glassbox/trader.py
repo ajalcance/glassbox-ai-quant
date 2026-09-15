@@ -465,6 +465,12 @@ class Trader:
                 "qty": qty,
                 "max_loss": risk * qty,
                 "sizing_reason": sizing.reason,
+                # Structured, not just prose inside cost_to_trade's detail.
+                # Calibrating that check means joining these against outcomes,
+                # and the 14 Sep pass had to regex them back out of the
+                # sentence — which works exactly until the wording changes.
+                "entry_price": net_price,
+                "round_trip_cost": ctx.round_trip_cost,
                 **decision.as_dict(),
             },
         )
