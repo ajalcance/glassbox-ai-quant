@@ -405,29 +405,41 @@ macro:
   # `macro_calendar` check when no event is in the future; when that fires,
   # refresh this list rather than ignoring it.
   #
-  # Every date below is verified against the agency that issues it — a WRONG
-  # date is worse than a missing one, since it blacks out a quiet session and
-  # leaves the real print exposed:
-  #   PPI            bls.gov/schedule/news_release/ppi.htm — Aug data, 10 Sep
-  #   Retail sales   census.gov MARTS release: "The August 2026 Advance
-  #                  Monthly Retail report is scheduled for release on
-  #                  September 16, 2026 at 8:30"
-  #   CPI            bls.gov CPI schedule + financecalendar.com, both 11 Sep
-  #   FOMC           fedratecalc.com + financecalendar.com, both 16 Sep 14:00
-  # Re-verify against the issuer, not an aggregator, when refreshing.
+  # Every date below is verified against the agency that ISSUES it — never an
+  # aggregator. A WRONG date is worse than a missing one: it blacks out a quiet
+  # session and leaves the real print exposed.
+  #
+  # Refreshed 16 Sep 2026, when the check above fired for the second time. The
+  # previous list ran out the moment the FOMC printed, and the two tests in
+  # test_regime_macro.py failed the same evening — which is the mechanism
+  # working, not a broken suite. Refresh the list; never relax the tests.
+  #
+  #   PCE/Personal Income  bea.gov/news/schedule — Aug data, 30 Sep 08:30
+  #   Employment Situation bls.gov/schedule/news_release/empsit.htm — Sep data,
+  #                        Fri 2 Oct 08:30
+  #   CPI (September)      bls.gov/schedule/news_release/cpi.htm — 14 Oct 08:30
+  #   PPI (September)      bls.gov/schedule/news_release/ppi.htm — 15 Oct 08:30
+  #   FOMC                 federalreserve.gov/monetarypolicy/fomccalendars.htm
+  #                        — Oct 27-28 meeting, statement 2pm ET on day two
+  #
+  # DELIBERATELY ABSENT: Retail Sales (September). The census.gov MARTS
+  # schedule page did not confirm an October date at the time of writing, and
+  # the monthly pattern (~15 Oct) is an inference, not a verified date. A
+  # missing event costs one unguarded print; a guessed one blacks out the wrong
+  # session AND leaves the real print exposed. Add it once census.gov states it.
   events:
-    - { at: "2026-09-01T10:00:00-04:00", name: "ISM Manufacturing + JOLTS" }
-    - { at: "2026-09-02T08:15:00-04:00", name: "ADP Employment" }
-    - { at: "2026-09-04T08:30:00-04:00", name: "Nonfarm Payrolls" }
-    - { at: "2026-09-10T08:30:00-04:00", name: "PPI (August)" }
-    - { at: "2026-09-11T08:30:00-04:00", name: "CPI (August)" }
-    - { at: "2026-09-16T08:30:00-04:00", name: "Retail Sales (August)" }
-    # The only INTRA-SESSION event on the calendar. Every other release here
-    # prints at 08:15-10:00 ET, so its 2h window opens and closes before or
-    # around the bell. FOMC at 14:00 ET puts the blackout at 12:00-14:30 ET,
-    # squarely inside the session: the first real test of short-premium
-    # suppression while the book is live and the manager is running.
-    - { at: "2026-09-16T14:00:00-04:00", name: "FOMC decision + projections" }
+    - { at: "2026-09-30T08:30:00-04:00", name: "PCE / Personal Income (August)" }
+    - { at: "2026-10-02T08:30:00-04:00", name: "Employment Situation (September)" }
+    - { at: "2026-10-14T08:30:00-04:00", name: "CPI (September)" }
+    - { at: "2026-10-15T08:30:00-04:00", name: "PPI (September)" }
+    # INTRA-SESSION, like every FOMC. Other releases here print at 08:30, so
+    # their 2h window opens and closes before the bell. A 14:00 ET decision puts
+    # the blackout at 12:00-14:30 ET, squarely inside the session. Observed
+    # 16 Sep 2026: the blackout vetoed correctly, the book was already flat
+    # because the bell gate had closed it the night before for Retail Sales, and
+    # the post-decision window produced no tradable edge (implied/expected
+    # ratios 0.74-0.82, none reaching the 0.70 credit threshold).
+    - { at: "2026-10-28T14:00:00-04:00", name: "FOMC decision + projections" }
 
 floor:
   # The daily best-idea floor. If nothing has traded organically by the trigger

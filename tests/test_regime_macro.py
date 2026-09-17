@@ -19,6 +19,32 @@ CFG = load_config()
 ET = UTC  # events carry their own offsets; tests use explicit ISO
 
 
+def _with_events(cfg, events):
+    Event = type(cfg.macro.events[0])
+    return cfg.model_copy(update={
+        "macro": cfg.macro.model_copy(update={
+            "events": [Event(at=a, name=n) for a, n in events]
+        })
+    })
+
+
+# A FIXED calendar for every test that verifies blackout *mechanism*.
+#
+# These tests used to read the live calendar, which coupled "does the window
+# open 2h early" to "which releases happen this month". Refreshing the calendar
+# on 16 Sep broke six of them at once — and a suite that breaks when you update
+# operational data creates pressure NOT to update it, on precisely the data that
+# must be kept current. The mechanism is timeless; the schedule is not.
+#
+# Only `test_the_macro_calendar_still_describes_the_future` reads the live
+# config, because staleness is the one thing it exists to detect.
+FIXED = _with_events(CFG, [
+    ("2026-09-01T10:00:00-04:00", "ISM Manufacturing + JOLTS"),
+    ("2026-09-02T08:15:00-04:00", "ADP Employment"),   # premarket, blackout-blind
+    ("2026-09-04T08:30:00-04:00", "Nonfarm Payrolls"),
+])
+
+
 def at(iso: str) -> datetime:
     return datetime.fromisoformat(iso)
 
@@ -106,21 +132,21 @@ def test_missing_factors_drop_out_rather_than_defaulting():
 
 
 def test_blackout_opens_before_and_closes_after():
-    w = current_window(CFG, at("2026-09-01T07:59:00-04:00"))
+    w = current_window(FIXED, at("2026-09-01T07:59:00-04:00"))
     assert not w.active, "2h01m before the release is outside the window"
-    assert current_window(CFG, at("2026-09-01T08:00:00-04:00")).active
-    assert current_window(CFG, at("2026-09-01T10:30:00-04:00")).active
-    assert not current_window(CFG, at("2026-09-01T10:31:00-04:00")).active
+    assert current_window(FIXED, at("2026-09-01T08:00:00-04:00")).active
+    assert current_window(FIXED, at("2026-09-01T10:30:00-04:00")).active
+    assert not current_window(FIXED, at("2026-09-01T10:31:00-04:00")).active
 
 
 def test_quiet_monday_reports_the_next_event():
-    w = current_window(CFG, at("2026-08-31T10:00:00-04:00"))
+    w = current_window(FIXED, at("2026-08-31T10:00:00-04:00"))
     assert not w.active
     assert "ISM" in w.detail
 
 
 def test_nfp_lands_on_submission_morning():
-    w = current_window(CFG, at("2026-09-04T08:00:00-04:00"))
+    w = current_window(FIXED, at("2026-09-04T08:00:00-04:00"))
     assert w.active and "Nonfarm" in w.event_name
 
 
@@ -131,7 +157,7 @@ def test_gate_refuses_short_premium_into_a_release(bull_put):
     from glassbox.gate import evaluate
     from tests.test_gate import ctx, veto_names
 
-    window = current_window(CFG, at("2026-09-01T09:00:00-04:00"))
+    window = current_window(FIXED, at("2026-09-01T09:00:00-04:00"))
     d = evaluate(ctx(structure=bull_put, macro_window=window), CFG)
     assert "macro_blackout" in veto_names(d), (
         "selling insurance right before the insured event is the trade the "
@@ -153,7 +179,7 @@ def test_gate_permits_long_convexity_into_a_release(store, audit):
             leg("SPY260918C00455000", Right.CALL, 455, LegSide.SHORT),
         ),
     )
-    window = current_window(CFG, at("2026-09-01T09:00:00-04:00"))
+    window = current_window(FIXED, at("2026-09-01T09:00:00-04:00"))
     d = evaluate(ctx(structure=debit, macro_window=window), CFG)
     assert "macro_blackout" not in veto_names(d)
     assert EXP  # silence unused-import pedantry
@@ -199,7 +225,7 @@ def test_release_before_next_open_sees_a_premarket_print_the_blackout_would_miss
     inactive (it opens 06:15 Wed) — but the manager's first tick is 09:30
     Wed, after the window has closed. The lookahead is what the bell gate
     asks instead."""
-    cfg = load_config()
+    cfg = FIXED
     tuesday_bell = datetime(2026, 9, 1, 19, 55, tzinfo=UTC)
     assert not current_window(cfg, tuesday_bell).active
     ahead = release_before_next_open(cfg, tuesday_bell)
@@ -207,7 +233,7 @@ def test_release_before_next_open_sees_a_premarket_print_the_blackout_would_miss
 
 
 def test_release_before_next_open_ignores_a_print_two_sessions_out():
-    cfg = load_config()
+    cfg = FIXED
     wednesday_bell = datetime(2026, 9, 2, 19, 55, tzinfo=UTC)  # NFP is Friday
     assert not release_before_next_open(cfg, wednesday_bell).active
     thursday_bell = datetime(2026, 9, 3, 19, 55, tzinfo=UTC)
