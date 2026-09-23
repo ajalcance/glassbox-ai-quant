@@ -175,11 +175,43 @@ gate:
   # roughly 3-4% of real spread for print-rich names, while genuinely thin
   # books (XLK condor legs: 13-25 prints/day, quoted 34.7%) stay excluded.
   # History: 5.0 -> 10.0 on Fri (live calibration), 10.0 -> 20.0 on 1 Sep
-  # (feed-inflation measurement). Slippage protection does not live here
-  # anyway: entries start at mid and the price ladder bounds what a wide
-  # market can cost; this check exists to exclude dead contracts, which the
-  # OI floor below also enforces.
-  max_spread_pct_of_mid: 20.0
+  # (feed-inflation measurement), 20.0 -> 8.0 on 23 Sep (OUTCOMES).
+  #
+  # The 1 Sep reasoning above is still true and was still not enough. It
+  # argued from spread MEASUREMENT — "20 indicative is ~3-4% real, so a
+  # tighter cap excludes genuinely liquid trades" — because in September
+  # there were no outcomes to argue from. There are now. Quoted spread at
+  # entry against realised P&L, 27 closed positions:
+  #
+  #     spread at entry      n     net      win%
+  #     < 3%                 5   +$29       80%     <- the ONLY profitable band
+  #     3-6%                 8   -$117      38%
+  #     6-12%                8   -$599      38%
+  #     > 12%                6   -$339      17%
+  #
+  # Monotonic across all four bands. Below 6%: -$88 over 13 trades. Above 6%:
+  # -$938 over 14. Two independent measurements agree: `cost_to_trade` found
+  # 4 of 4 losers below a 1.5x target/cost ratio, and the 9 Sep fill
+  # experiment found time-to-fill tracking quoted spread almost monotonically
+  # (SPY 2.2% -> 5s ... ADBE 13.7% -> never).
+  #
+  # Why an inflated feed still predicts: the inflation is NOT uniform — 5-12x
+  # on single names, only 1.3-2x on SPY. So a high indicative reading is a
+  # proxy for liquidity CLASS, not a literal spread. The cap does real work
+  # in feed units even though its name overstates what it measures.
+  #
+  # 8.0 rather than the evidence-optimal 6.0, deliberately. `cost_to_trade`
+  # already prices the round trip per structure and is the precise instrument;
+  # this cap is a blunt pre-filter and does not need to do all the work. 8.0
+  # removes the >12% band outright (17% win rate) and most of 6-12%, while
+  # `cost_to_trade` handles the marginal zone. Replay over 14-22 Sep:
+  # 191 tradable signals -> 145 at 8.0 (76% retained), vs 132 at 6.0 and
+  # 159 at 10.0. The true cost is lower than 24% because wide-quote contracts
+  # disproportionately never fill.
+  #
+  # Caveat kept in view: n=27, and 6% is where the bucket boundary was drawn.
+  # Tighten further only on more outcomes, never to make a number look better.
+  max_spread_pct_of_mid: 8.0
   min_open_interest: 200
   # The spread is judged on a rolling median, not a snapshot. The indicative
   # feed swings tens of percent minute to minute (UBER 2 Sep: 30.8% at 13:38,
