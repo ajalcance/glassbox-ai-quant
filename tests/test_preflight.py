@@ -13,7 +13,7 @@ def account(**kw):
         "account_blocked": False,
         "options_trading_level": 3,
         "equity": "100000",
-        "pattern_day_trader": False,
+        "options_buying_power": "100000",
     }
     base.update(kw)
     return SimpleNamespace(**base)
@@ -64,13 +64,28 @@ def test_inactive_account_is_fatal():
     assert not result.ok
 
 
-def test_pdt_below_25k_warns_but_does_not_block():
-    """The system may legitimately run smaller — but it must be known."""
-    result = run(FakeClient(account(equity="10000", pattern_day_trader=True)))
-    check = names(result)["pattern_day_trader"]
+def test_no_pattern_day_trader_check_remains():
+    """FINRA retired PDT effective 4 June 2026. A check citing it described a
+    rule that no longer existed, on every start of a $10,000 account."""
+    from glassbox.config import load_config
+
+    result = run(FakeClient(account(equity="10000")), cfg=load_config())
+    assert "pattern_day_trader" not in names(result)
+
+
+def test_insufficient_options_buying_power_warns_but_does_not_block():
+    """Options are cash-collateralised: a spread's collateral is its max loss.
+    Too little buying power for one full-size position must be visible."""
+    from glassbox.config import load_config
+
+    cfg = load_config()
+    result = run(FakeClient(account(equity="10000", options_buying_power="40")), cfg=cfg)
+    check = names(result)["options_buying_power"]
     assert not check.passed and not check.fatal
-    assert result.ok, "a PDT warning must not prevent startup"
-    assert "PDT rules" in check.detail
+    assert result.ok
+
+    ok = run(FakeClient(account(equity="10000", options_buying_power="10000")), cfg=cfg)
+    assert names(ok)["options_buying_power"].passed
 
 
 def test_unreachable_broker_is_reported_not_raised():

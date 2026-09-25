@@ -86,20 +86,6 @@ def _account_checks(account) -> list[Check]:
             )
         )
 
-    equity = float(getattr(account, "equity", 0) or 0)
-    # PDT applies below $25k and would silently reject intraday round trips.
-    # Not fatal: the system may legitimately run smaller, but it must be known.
-    checks.append(
-        Check(
-            "pattern_day_trader",
-            equity >= 25_000 or not getattr(account, "pattern_day_trader", False),
-            f"equity ${equity:,.0f}"
-            + (
-                "" if equity >= 25_000 else " — below $25k, PDT rules restrict intraday round trips"
-            ),
-            fatal=False,
-        )
-    )
     return checks
 
 
@@ -142,6 +128,10 @@ def run(trading_client, market_data=None, cfg=None) -> Preflight:
             )
 
     checks.append(_macro_calendar_check(cfg))
+    try:
+        checks.append(_buying_power_check(cfg, trading_client.get_account()))
+    except Exception as e:  # noqa: BLE001 -- reported, never thrown
+        checks.append(Check("options_buying_power", False, f"{type(e).__name__}: {e}", fatal=False))
     try:
         checks.append(_account_size_check(cfg, float(trading_client.get_account().equity)))
     except Exception as e:  # noqa: BLE001 -- reported, never thrown
@@ -241,3 +231,34 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _buying_power_check(cfg, account) -> Check:
+    """Can the account post collateral for one full-size position?
+
+    Replaces a pattern-day-trader check that had become false in three ways.
+    FINRA retired the PDT rule effective 4 June 2026, so "below $25k, PDT rules
+    restrict intraday round trips" described a rule that no longer existed —
+    shown on every start of a $10,000 account that makes most of its round
+    trips intraday. It read `account.pattern_day_trader`, a field Alpaca
+    scheduled for removal, defaulting to False — so it passed by checking
+    nothing. And $25,000 was hardcoded.
+
+    What actually binds a defined-risk options book is cash. Options are not
+    marginable, and a spread's collateral is its maximum loss, so the question
+    is whether options buying power covers one position at the per-position cap.
+    """
+    equity = float(getattr(account, "equity", 0) or 0)
+    raw = getattr(account, "options_buying_power", None)
+    if raw is None:
+        raw = getattr(account, "buying_power", None)
+    if raw is None or cfg is None:
+        return Check("options_buying_power", True, "not reported", fatal=False)
+    bp = float(raw)
+    need = equity * cfg.risk.max_loss_per_position_pct / 100
+    return Check(
+        "options_buying_power",
+        bp >= need,
+        f"${bp:,.0f} available vs ${need:,.0f} for one full-size position",
+        fatal=False,
+    )
