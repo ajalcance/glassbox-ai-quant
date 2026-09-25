@@ -214,6 +214,12 @@ class Runner:
     def market_state(self) -> MarketState:
         account = self.trading.get_account()
         equity = float(account.equity)
+        # The dashboard reads this; before 25 Sep nothing wrote it, so every
+        # equity-derived figure on the page (heat cap, delta band) was computed
+        # from the configured starting equity instead of the account — right
+        # only while the two happened to agree. It is the broker's number,
+        # recorded where the read-only dashboard can see it.
+        self.store.set_state("last_equity", f"{equity:.2f}")
         clock = self.data.clock()
 
         start = session_baseline(self.store, equity)

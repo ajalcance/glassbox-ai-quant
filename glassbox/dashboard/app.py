@@ -4,7 +4,8 @@ Deliberately shows only what Alpaca's own dashboard cannot: the reasoning behind
 each decision, the trades that were refused and never submitted, risk-budget
 utilisation against our own caps, and the state of the learning components.
 Equity, positions and the order blotter are the broker's job and are linked to
-rather than rebuilt.
+rather than rebuilt. Equity appears only as the CAPITAL BASIS every risk limit
+on the page is a fraction of — without it, "heat $X of $600" cannot be read.
 
 The page has no controls. It is served publicly as the demo URL, so it can read
 state and nothing else — the kill switch and every other control lives in the
@@ -60,10 +61,13 @@ def state() -> dict:
     cfg = _cfg()
     store = _store()
     try:
-        equity = cfg.account.starting_equity
+        target = float(cfg.account.starting_equity)
         stored_equity = store.get_state("last_equity")
-        if stored_equity:
-            equity = float(stored_equity)
+        # Live equity from the broker when the trader has recorded it; the
+        # configured size only as a stand-in before its first tick, and said so.
+        equity_is_live = bool(stored_equity)
+        equity = float(stored_equity) if equity_is_live else target
+        size_ratio = equity / target if target else 1.0
 
         portfolio = snapshot(store)
         heat_cap = equity * cfg.risk.portfolio_heat_pct / 100
@@ -89,6 +93,9 @@ def state() -> dict:
                 "heat_cap": heat_cap,
                 "heat_pct_of_cap": 100 * portfolio.heat / heat_cap if heat_cap else 0.0,
                 "open_positions": portfolio.open_position_count,
+                "equity": equity,
+                "equity_is_live": equity_is_live,
+                "sized_for": target,
                 "delta_dollars": portfolio.greeks.delta_dollars,
                 # Dollars, as the panel expects — derived from equity the same
                 # way the gate derives it, so the bar shows the limit that binds.
@@ -114,6 +121,12 @@ def state() -> dict:
                 "halt_reason": halt,
                 "heartbeat_age_seconds": heartbeat_age,
                 "audit_chain": audit_chain_status(cfg.paths.audit_dir),
+                # Same 2x tolerance as preflight's account_size check. Every
+                # limit scales with live equity, so a config tuned for one
+                # account size runs silently on another — this is the one place
+                # an operator would see it without reading container logs.
+                "account_size_ok": 0.5 <= size_ratio <= 2.0,
+                "account_size_ratio": size_ratio,
             },
         }
     finally:

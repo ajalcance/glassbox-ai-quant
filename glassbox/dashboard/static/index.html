@@ -108,6 +108,8 @@
   <div class="panel">
     <h2>Risk budget <em id="riskstate"></em></h2>
     <div class="rows">
+      <div class="row"><span class="k">Capital basis</span>
+        <span class="v" id="capital">—</span></div>
       <div>
         <div class="row"><span class="k">Portfolio heat</span>
           <span class="v" id="heat">—</span></div>
@@ -134,6 +136,8 @@
         <span id="hb" class="pill idle">—</span></div>
       <div class="row"><span class="k">Audit chain</span>
         <span id="chain" class="pill idle">—</span></div>
+      <div class="row"><span class="k">Account size</span>
+        <span id="acctsize" class="pill idle">—</span></div>
       <div class="row"><span class="k">Guards</span>
         <span class="v" id="guards">—</span></div>
     </div>
@@ -205,6 +209,10 @@ function setBar(el, fraction) {
 
 function renderState(s) {
   const r = s.risk;
+  // Every limit on this panel is a fraction of this number, so it comes first.
+  $("capital").textContent = r.equity_is_live
+    ? `${money(r.equity)} · sized for ${money(r.sized_for)}`
+    : `sized for ${money(r.sized_for)} · awaiting first read`;
   $("heat").textContent = `${money(r.heat)} of ${money(r.heat_cap)}`;
   setBar($("heatbar"), r.heat_cap ? r.heat / r.heat_cap : 0);
   $("delta").textContent = `${money(r.delta_dollars)} of ±${money(r.delta_band)}`;
@@ -225,6 +233,17 @@ function renderState(s) {
   if (age === null || age === undefined) { hb.textContent = "never"; hb.className = "pill idle"; }
   else if (age > 90) { hb.textContent = Math.round(age) + "s stale"; hb.className = "pill bad"; }
   else { hb.textContent = Math.round(age) + "s ago"; hb.className = "pill ok"; }
+
+  // A config tuned for one account size runs silently on another, because
+  // every limit scales with live equity. This is where that would show.
+  const as_ = $("acctsize");
+  if (!r.equity_is_live) { as_.textContent = "not yet read"; as_.className = "pill idle"; }
+  else if (h.account_size_ok) { as_.textContent = "matches config"; as_.className = "pill ok"; }
+  else {
+    as_.textContent = `${h.account_size_ratio.toFixed(1)}x config size`;
+    as_.className = "pill bad";
+    as_.title = "Every limit scales with equity: positions are this multiple of what the config was tuned for.";
+  }
 
   const ch = $("chain"), a = h.audit_chain;
   ch.textContent = a.verified ? `verified · ${a.records}` : "BROKEN";

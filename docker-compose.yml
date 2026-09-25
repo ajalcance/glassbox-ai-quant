@@ -13,8 +13,8 @@ x-common: &common
   env_file: .env
   restart: unless-stopped
   volumes:
-    - state:/app/data
-    - audit:/app/audit
+    - state_10k:/app/data
+    - audit_10k:/app/audit
     - chains:/app/chains
     - ./models:/app/models:ro
   logging:
@@ -68,8 +68,24 @@ services:
     depends_on: [dashboard]
 
 volumes:
+  # ONE ACCOUNT, ONE LEDGER. The store and the audit log belong to the broker
+  # account they record, so a new account gets new volumes rather than a
+  # continuation of someone else's history.
+  #
+  # `state` and `audit` are the contest account (PA31QN3VRL7B, 31 Aug - 25 Sep):
+  # 22 closed positions, the hash-chained audit trail and every finding in
+  # docs/LESSONS.md. They are deliberately still declared and deliberately no
+  # longer mounted — preserved exactly as they were, never copied or cleared.
+  # The audit log is append-only; the honest way to retire it is to stop
+  # writing to it.
+  #
+  # Reusing them on the $10,000 account would have broken on the first tick:
+  # the old store records a $100,180 peak equity, so the supervisor would read
+  # a $10,000 account as a -90% drawdown and hard-halt it.
   state:
   audit:
+  state_10k:
+  audit_10k:
   # Captured option chains, for the replay harness. This needs a volume for the
   # same reason state and audit do, and not having one cost a week of data:
   # `_capture_chain` wrote to /app/chains inside the container's writable layer,
