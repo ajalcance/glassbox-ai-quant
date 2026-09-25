@@ -118,6 +118,7 @@ class SignalCfg(BaseModel):
     wing_width_pct: float
     min_move_pct_for_strikes: float
     strike_liquidity_tolerance_widths: float
+    prefer_monthly_expiry: bool
 
 
 class RegimeCfg(BaseModel):

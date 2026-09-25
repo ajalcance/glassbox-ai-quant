@@ -116,3 +116,65 @@ def test_liquidity_may_move_a_leg_but_never_redesign_the_structure():
     width = s.legs[0].strike - s.legs[1].strike
     assert width <= 2 * intended_width, f"wing stretched to {width} (intended {intended_width})"
     assert s.legs[1].strike != 60.0, "the far liquid strike must not be chosen as the wing"
+
+
+# -- expiry selection ----------------------------------------------------------
+# The old rule was min(expiries), which reliably lands on a thin weekly. §31
+# traced the payoff asymmetry to an entry hole (median first mark -16% of entry
+# price); wide quotes on thin strikes are what digs it.
+
+
+def test_monthly_is_the_third_friday():
+    from datetime import date
+
+    from glassbox.data.market import is_monthly_expiry
+
+    assert is_monthly_expiry(date(2026, 9, 18))   # third Friday of Sep 2026
+    assert is_monthly_expiry(date(2026, 10, 16))  # third Friday of Oct 2026
+    assert not is_monthly_expiry(date(2026, 9, 11)), "second Friday is a weekly"
+    assert not is_monthly_expiry(date(2026, 9, 25)), "fourth Friday is a weekly"
+    assert not is_monthly_expiry(date(2026, 9, 17)), "Thursday is never a monthly"
+
+
+def test_prefers_the_monthly_over_a_nearer_weekly():
+    from datetime import date
+
+    from glassbox.data.market import choose_expiry
+
+    expiries = [date(2026, 9, 11), date(2026, 9, 18), date(2026, 9, 25)]
+    assert choose_expiry(expiries) == date(2026, 9, 18)
+
+
+def test_picks_the_nearest_monthly_when_several_are_in_window():
+    from datetime import date
+
+    from glassbox.data.market import choose_expiry
+
+    expiries = [date(2026, 9, 18), date(2026, 10, 16)]
+    assert choose_expiry(expiries) == date(2026, 9, 18)
+
+
+def test_falls_back_to_earliest_when_no_monthly_in_window():
+    """Previous behaviour exactly — a window with only weeklies is unchanged."""
+    from datetime import date
+
+    from glassbox.data.market import choose_expiry
+
+    expiries = [date(2026, 9, 25), date(2026, 10, 2), date(2026, 10, 9)]
+    assert choose_expiry(expiries) == date(2026, 9, 25)
+
+
+def test_preference_can_be_switched_off():
+    from datetime import date
+
+    from glassbox.data.market import choose_expiry
+
+    expiries = [date(2026, 9, 11), date(2026, 9, 18)]
+    assert choose_expiry(expiries, prefer_monthly=False) == date(2026, 9, 11)
+
+
+def test_empty_expiry_list_is_an_error_not_a_guess():
+    from glassbox.data.market import choose_expiry
+
+    with pytest.raises(ValueError):
+        choose_expiry([])

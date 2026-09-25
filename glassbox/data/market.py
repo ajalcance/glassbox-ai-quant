@@ -77,6 +77,50 @@ def _read_retries() -> int:
     return load_config().execution.broker_read_retries
 
 
+def _prefer_monthly() -> bool:
+    from glassbox.config import load_config
+
+    return load_config().signal.prefer_monthly_expiry
+
+
+def is_monthly_expiry(d: date) -> bool:
+    """True for a standard monthly expiry — the third Friday of the month.
+
+    Standard monthlies are where the open interest lives. Weeklies on the same
+    underlying quote far wider on non-round strikes, because market makers post
+    size where the flow is.
+    """
+    return d.weekday() == 4 and 15 <= d.day <= 21
+
+
+def choose_expiry(expiries: list[date], prefer_monthly: bool = True) -> date:
+    """Pick the expiry to build a structure in, from those already filtered to
+    the horizon window.
+
+    The original rule was `min(expiries)` — the nearest expiry that clears the
+    minimum time-to-expiry. That reliably lands on a WEEKLY, and weeklies are
+    where this system has been bleeding: one session produced 17 liquidity
+    vetoes out of 20 gate arrivals on the most liquid names in the market
+    (AVGO open interest 4, MU 37, JPM 63). §31 traced the payoff asymmetry to
+    an entry hole — a median first mark of -16% of entry price — and wide
+    quotes on thin strikes are where that hole comes from.
+
+    A 6-hour thesis does not need a 2-day expiry. Preferring the monthly costs
+    some theta on credit structures and buys strikes that can actually be
+    traded in and out of.
+
+    Falls back to the earliest when no monthly is in the window, which is the
+    previous behaviour.
+    """
+    if not expiries:
+        raise ValueError("no expiries to choose from")
+    if prefer_monthly:
+        monthlies = [d for d in expiries if is_monthly_expiry(d)]
+        if monthlies:
+            return min(monthlies)
+    return min(expiries)
+
+
 def parse_occ(symbol: str) -> tuple[str, date, Right, float]:
     """Decode an OCC option symbol: AAPL260918C00230000."""
     m = OCC.match(symbol)
@@ -277,7 +321,7 @@ class MarketData:
         by_expiry: dict[date, list] = {}
         for c in contracts:
             by_expiry.setdefault(parse_expiry(c.expiration_date), []).append(c)
-        expiry = min(by_expiry)
+        expiry = choose_expiry(sorted(by_expiry), prefer_monthly=_prefer_monthly())
         chosen = by_expiry[expiry]
 
         spot = self.spot(symbol)

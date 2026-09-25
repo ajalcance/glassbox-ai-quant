@@ -403,6 +403,34 @@ signal:
   # points down would have redesigned the spread. Two widths for the
   # primary leg converts the first without permitting the second.
   strike_liquidity_tolerance_widths: 2.0
+  # Build in the standard MONTHLY expiry (third Friday) rather than the nearest
+  # weekly that clears the horizon.
+  #
+  # The old rule was `min(expiries)` — earliest that satisfies minimum
+  # time-to-expiry — which reliably lands on a weekly. Weeklies are where this
+  # system has been bleeding. One session produced 17 liquidity vetoes out of
+  # 20 gate arrivals on the most liquid names in the market: AVGO open interest
+  # 4, MU 37, JPM 63. Market makers post size where the flow is, and on
+  # non-round strikes that is the monthly.
+  #
+  # §31 is why this moved from "backlog" to "do it": across 42 filled positions
+  # the median FIRST mark after fill is -16% of entry price, only 4 of 42 are
+  # positive on arrival, and the payoff ratio is 0.32 against a break-even
+  # requirement of 0.76. Re-based on where a position actually starts, the move
+  # distribution is near-symmetric (+39% / -33%) — the asymmetry is the entry
+  # hole, not the market, and wide quotes on thin strikes are what digs it.
+  #
+  # The cost is real and accepted: a monthly gives up theta on credit
+  # structures and carries less gamma for a short thesis. A 6-hour thesis does
+  # not need a 2-day expiry; it needs strikes it can trade out of.
+  #
+  # NOT replay-validated, and it cannot be: chain capture records only the
+  # expiry that was actually chosen, so no recorded data exists for the monthly
+  # that was never selected. Verified instead against LIVE chains on the dev
+  # lane before deploy — the method that caught three separate defects in the
+  # 2 Sep strike-selection change. Falls back to the earliest expiry when no
+  # monthly sits in the window, which is the previous behaviour exactly.
+  prefer_monthly_expiry: true
 
 regime:
   # Cross-asset risk read. Each factor is a percentile of today's value within
