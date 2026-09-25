@@ -157,3 +157,31 @@ def test_taper_reduces_actual_contracts():
 
 def test_zero_equity_does_not_divide_by_zero():
     assert heat_taper(0.0, 0.0, CFG) == 1.0
+
+
+def test_abstaining_uses_the_configured_multiplier_not_the_calibrated_map():
+    """While the meta-labeler abstains, analyst confidence is not a calibrated
+    probability. Pushing p=0.60 through the calibrated map gave a constant ~0.5x
+    nobody chose (§28); the abstain path uses an explicit setting instead."""
+    from glassbox.sizing import meta_multiplier, size_position
+
+    cal = size_position(10_000, 100.0, 0.60, CFG, abstaining=False)
+    abs_ = size_position(10_000, 100.0, 0.60, CFG, abstaining=True)
+    assert cal.meta_multiplier == meta_multiplier(0.60, CFG)
+    assert abs_.meta_multiplier == CFG.sizing.abstain_multiplier
+
+
+def test_abstaining_still_respects_the_confidence_floor():
+    from glassbox.sizing import size_position
+
+    r = size_position(10_000, 100.0, CFG.risk.min_meta_label_p - 0.01, CFG, abstaining=True)
+    assert r.qty == 0
+
+
+def test_ten_thousand_dollar_account_can_take_one_minimum_ticket():
+    """The point of the 25 Sep reconfiguration: at $10,000 a ~$150 ticket must
+    fit, or the system cannot trade at all."""
+    from glassbox.sizing import size_position
+
+    r = size_position(10_000, 150.0, 0.60, CFG, abstaining=True, context_multiplier=1.0)
+    assert r.qty == 1

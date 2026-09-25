@@ -1,8 +1,10 @@
 # GlassBox AI Quant — all tunable constants live here, never in code.
-# Contest values. Fork for live use by changing this file, not the framework.
+# Sized for a $10,000 account (25 Sep). Every limit is a fraction of equity,
+# so these values behave identically on whatever the broker account holds —
+# which also means they must NOT run on a larger account unreviewed.
 
 account:
-  starting_equity: 100000        # contest requirement
+  starting_equity: 10000         # the capital this system is built to run on
   paper: true
 
 risk:
@@ -35,7 +37,13 @@ risk:
   # one $7 short of a single contract). The full history — raised, interaction
   # found on day one, reverted, interaction fixed, restored — is in the README
   # and the audit log. The delta band itself has never moved.
-  r_per_trade_pct: 1.0
+  # 1.0 -> 1.5 on 25 Sep, when the system moved to a $10,000 account. At that
+  # size the minimum economically viable ticket (~$150/contract — below $50
+  # the round trip exceeds the profit target, 0 of 13 approved) IS 1.5% of
+  # equity, so the risk budget and the per-position cap converge: one
+  # position is the whole per-trade budget, and the context tapers below are
+  # what shrink it when conditions warrant.
+  r_per_trade_pct: 1.5
   max_loss_per_position_pct: 1.5
   max_loss_per_underlying_pct: 3.0
   portfolio_heat_pct: 6.0        # sum of max-loss across open positions
@@ -44,7 +52,12 @@ risk:
   # x 100 x ~$770 spot), so the original 15000 vetoed the strategy's own core
   # structure on its most liquid underlying. 40000 fits ~1.3 such verticals
   # while still capping the book's directional exposure.
-  delta_dollars_band: 40000
+  # Expressed as a FRACTION OF EQUITY, not dollars (25 Sep). The absolute
+  # 40000 was the lesson this project opens with: calibrated 28 Aug against
+  # SPY verticals, silently wrong by 31 Aug when SPY moved, and meaningless on
+  # any other account size — $40,000 of delta on a $10,000 account is 4x
+  # equity. 40.0 reproduces the old band exactly at $100,000.
+  delta_band_pct_of_equity: 40.0
   daily_loss_halt_pct: 2.0       # supervisor: flatten + halt for session
   max_drawdown_halt_pct: 6.0     # supervisor: flatten + halt, manual reset
   loss_streak_half_size: 4       # consecutive losses before halving R
@@ -67,6 +80,15 @@ sizing:
   drawdown_taper_start: 0.5  # fraction of the daily-loss limit
   drawdown_taper_floor: 0.3
   meta_multiplier_floor: 0.4     # multiplier at p = min_meta_label_p
+  # Size multiplier while the meta-labeler is ABSTAINING (under its training
+  # minimum). Before 25 Sep there was no such setting: analyst confidence went
+  # through the calibrated-probability mapping above, and because 200 of 338
+  # signals sat at exactly p=0.60 the result was a constant ~0.5x nobody chose
+  # (§28). Set to 1.0 with the move to $10,000: at 0.5 the budget could never
+  # reach one minimum ticket, so the system would not trade at all. The
+  # deliberate haircuts remain — regime, heat, drawdown, macro — and the
+  # confidence floor still vetoes.
+  abstain_multiplier: 1.0
   meta_multiplier_ceiling: 1.0   # multiplier at p >= meta_multiplier_ceiling_p
   # Conviction at which sizing stops scaling up. We never lever up on high
   # confidence beyond this: confidence is the model's opinion, the cap is our

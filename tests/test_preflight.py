@@ -84,3 +84,18 @@ def test_all_problems_reported_at_once():
     result = run(FakeClient(account(status="ONBOARDING", options_trading_level=1)))
     failed = {c.name for c in result.failures}
     assert {"account_active", "options_level"} <= failed
+
+
+def test_account_size_mismatch_is_loud_but_not_fatal():
+    """25 Sep: a $10,000 config nearly went onto a ~$98,600 account. Every limit
+    scales with live equity, so it would have run — at ~3x the intended size."""
+    from glassbox.config import load_config
+    from glassbox.preflight import _account_size_check
+
+    cfg = load_config()
+    target = cfg.account.starting_equity
+    wrong = _account_size_check(cfg, target * 9.86)
+    assert not wrong.passed and not wrong.fatal
+    assert "MISMATCH" in wrong.detail
+    assert _account_size_check(cfg, target * 1.2).passed
+    assert not _account_size_check(cfg, target * 0.3).passed, "too small is a mismatch too"

@@ -5,7 +5,7 @@ def test_default_config_loads_and_matches_plan():
     load_config.cache_clear()
     cfg = load_config()
     assert cfg.account.paper is True
-    assert cfg.account.starting_equity == 100000
+    assert cfg.account.starting_equity == 10000
     # R is a sizing preference and may be tuned; these are the relationships
     # that must hold whatever it is set to. Per-trade risk must stay below the
     # per-position cap, which must stay below the heat cap, or the backstops

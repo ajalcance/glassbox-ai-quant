@@ -370,6 +370,7 @@ class Trader:
             target_vol=self.cfg.sizing.target_daily_vol,
             loss_streak=market.loss_streak,
             context_multiplier=context_mult,
+            abstaining=self.meta_labeler is None or not self.meta_labeler.is_trained,
         )
         self.audit.append(
             "ml",
@@ -400,7 +401,7 @@ class Trader:
         book_greeks = self.data.post_trade_greeks(structure, 0)
         one_greeks = self.data.post_trade_greeks(structure, 1)
         per_spread_delta = one_greeks.delta_dollars - book_greeks.delta_dollars
-        band = self.cfg.risk.delta_dollars_band
+        band = market.equity * (self.cfg.risk.delta_band_pct_of_equity / 100)
         if per_spread_delta:
             while qty >= 1 and abs(book_greeks.delta_dollars + per_spread_delta * qty) > band:
                 qty -= 1

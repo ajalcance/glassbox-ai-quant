@@ -142,8 +142,45 @@ def run(trading_client, market_data=None, cfg=None) -> Preflight:
             )
 
     checks.append(_macro_calendar_check(cfg))
+    try:
+        checks.append(_account_size_check(cfg, float(trading_client.get_account().equity)))
+    except Exception as e:  # noqa: BLE001 -- reported, never thrown
+        checks.append(Check("account_size", False, f"{type(e).__name__}: {e}", fatal=False))
 
     return Preflight(tuple(checks))
+
+
+def _account_size_check(cfg, equity: float, tolerance: float = 2.0) -> Check:
+    """Is the broker account roughly the size this config was built for?
+
+    Every limit is a fraction of LIVE equity, so a config tuned for one account
+    size runs without complaint on any other — and means something different
+    there. On 25 Sep the system moved to a $10,000 configuration (r_per_trade
+    1.5%, no abstain haircut) while the running paper account still held
+    ~$98,600. Deploying that config onto that account would have made every
+    position about 3x larger than the day before, silently. The percentages
+    were right; the account was wrong.
+
+    Not fatal: the percentages still bound risk on any account. But a mismatch
+    beyond `tolerance`x in either direction is a deployment mistake until
+    someone says otherwise, and it should be the first line anyone reads.
+    """
+    if cfg is None:
+        return Check("account_size", True, "not checked", fatal=False)
+    target = float(cfg.account.starting_equity)
+    if target <= 0 or equity <= 0:
+        return Check("account_size", True, "not checked", fatal=False)
+    ratio = equity / target
+    if ratio > tolerance or ratio < 1 / tolerance:
+        return Check(
+            "account_size",
+            False,
+            f"MISMATCH — config is sized for ${target:,.0f}, account holds ${equity:,.0f} "
+            f"({ratio:.1f}x). Every limit scales with equity, so positions are "
+            f"{ratio:.1f}x what this config was tuned for.",
+            fatal=False,
+        )
+    return Check("account_size", True, f"${equity:,.0f} vs ${target:,.0f} target", fatal=False)
 
 
 def _macro_calendar_check(cfg) -> Check:

@@ -90,7 +90,9 @@ def state() -> dict:
                 "heat_pct_of_cap": 100 * portfolio.heat / heat_cap if heat_cap else 0.0,
                 "open_positions": portfolio.open_position_count,
                 "delta_dollars": portfolio.greeks.delta_dollars,
-                "delta_band": cfg.risk.delta_dollars_band,
+                # Dollars, as the panel expects — derived from equity the same
+                # way the gate derives it, so the bar shows the limit that binds.
+                "delta_band": equity * cfg.risk.delta_band_pct_of_equity / 100,
                 "positions_by_underlying": portfolio.positions_by_underlying,
                 "r_per_trade_pct": cfg.risk.r_per_trade_pct,
                 "daily_loss_halt_pct": cfg.risk.daily_loss_halt_pct,

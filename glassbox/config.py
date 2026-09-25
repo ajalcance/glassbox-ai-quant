@@ -27,7 +27,7 @@ class RiskCfg(BaseModel):
     max_loss_per_position_pct: float
     max_loss_per_underlying_pct: float
     portfolio_heat_pct: float
-    delta_dollars_band: float
+    delta_band_pct_of_equity: float
     daily_loss_halt_pct: float
     max_drawdown_halt_pct: float
     loss_streak_half_size: int
@@ -39,6 +39,7 @@ class SizingCfg(BaseModel):
     meta_multiplier_ceiling: float
     meta_multiplier_ceiling_p: float
     target_daily_vol: float
+    abstain_multiplier: float
     heat_taper_start: float
     heat_taper_floor: float
     drawdown_taper_start: float

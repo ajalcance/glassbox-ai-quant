@@ -248,7 +248,12 @@ def _check_greeks(ctx, cfg) -> CheckResult:
     g = ctx.post_trade_greeks
     if g is None:
         return CheckResult("greeks_bands", True, "no greeks supplied")
-    band = cfg.risk.delta_dollars_band
+    # Expressed as a fraction of EQUITY, not a constant. An absolute-dollar
+    # band is a calibration with an undocumented expiry date: 40000 was set on
+    # 28 Aug against SPY verticals carrying $25-35k of delta, and by 31 Aug a
+    # single vertical carried $34,450 and SPY was effectively untradeable. It
+    # also silently means something different on every account size.
+    band = ctx.equity * (cfg.risk.delta_band_pct_of_equity / 100)
     if abs(g.delta_dollars) > band:
         return CheckResult(
             "greeks_bands", False, f"net delta ${g.delta_dollars:,.0f} outside ±${band:,.0f}"

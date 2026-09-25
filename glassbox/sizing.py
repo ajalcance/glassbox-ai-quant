@@ -103,6 +103,7 @@ def size_position(
     target_vol: float | None = None,
     loss_streak: int = 0,
     context_multiplier: float = 1.0,
+    abstaining: bool = False,
 ) -> SizingResult:
     """Contracts to trade, or zero with a reason.
 
@@ -116,7 +117,21 @@ def size_position(
             "A zero-risk position would make every downstream risk check meaningless."
         )
 
-    mult = meta_multiplier(meta_label_p, cfg)
+    if abstaining:
+        # The meta-labeler has not trained, so `meta_label_p` is the analyst's
+        # self-reported confidence, not a calibrated P(profitable). Pushing it
+        # through `meta_multiplier` — a mapping built for calibrated
+        # probabilities — produced a constant 0.5x haircut nobody chose: 200 of
+        # 338 scored signals sat at exactly p=0.60 (an LLM's round-number hedge)
+        # and mapped to 0.50 (§28). The floor still vetoes; the scaling is now
+        # an explicit, configured decision instead of a scale mismatch.
+        mult = (
+            0.0
+            if meta_label_p < cfg.risk.min_meta_label_p
+            else cfg.sizing.abstain_multiplier
+        )
+    else:
+        mult = meta_multiplier(meta_label_p, cfg)
     if mult == 0.0:
         return SizingResult(
             0, f"meta-label p={meta_label_p:.2f} below {cfg.risk.min_meta_label_p}", 0.0, 0.0, 0, 0

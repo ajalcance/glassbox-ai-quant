@@ -97,8 +97,9 @@ def test_heat_cap_blocks_when_book_is_full(bull_put):
 
 
 def test_delta_band_blocks(bull_put):
-    over = CFG.risk.delta_dollars_band + 1_000  # relative to config: the band
-    # is a calibration number and the test must not re-pin its value
+    # The band is a fraction of equity; derive it rather than re-pin a number.
+    band = 100_000 * CFG.risk.delta_band_pct_of_equity / 100  # ctx() equity
+    over = band + 1_000
     d = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=over)), CFG)
     assert not d.approved and "greeks_bands" in veto_names(d)
     d2 = evaluate(ctx(structure=bull_put, post_trade_greeks=Greeks(delta_dollars=-over)), CFG)
@@ -411,3 +412,13 @@ def test_round_trip_cost_is_unknown_when_a_leg_is_missing():
         ContractQuote("SPY260918P00440000", Right.PUT, 440, EXPIRY, bid=2.30, ask=2.45)
     ]
     assert structure_round_trip_cost(make_bull_put(), chain) == 0.0
+
+
+def test_delta_band_scales_with_equity(bull_put):
+    """The same delta that is fine on $100,000 must be refused on $10,000.
+    An absolute-dollar band meant something different on every account size."""
+    g = Greeks(delta_dollars=5_000)
+    big = evaluate(ctx(structure=bull_put, equity=100_000, post_trade_greeks=g), CFG)
+    small = evaluate(ctx(structure=bull_put, equity=10_000, post_trade_greeks=g), CFG)
+    assert "greeks_bands" not in veto_names(big)
+    assert "greeks_bands" in veto_names(small)
