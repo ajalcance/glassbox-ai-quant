@@ -139,21 +139,99 @@ def test_standing_halt_reflattens_when_inventory_reappears(store, audit, tmp_pat
     assert client.flattens == 2, "inventory under a standing halt must be flattened again"
 
 
-def test_new_breach_reason_acts_again(store, audit, tmp_path, monkeypatch):
-    """A worse breach while already halted is a new breach, not an echo."""
+def test_a_different_guard_is_a_new_breach(store, audit, tmp_path, monkeypatch):
+    """A worse breach while already halted is a new breach, not an echo.
+
+    Identity is the GUARD, not its wording: a standing heartbeat halt followed
+    by the kill switch must act again, because a different guard fired.
+    """
     from glassbox.reconcile import HALT_KEY
     from glassbox.supervisor import run as supervisor_run
 
     monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    store.set_state(HALT_KEY, "trader heartbeat stale (120s > 90s)")
+    store.set_state(supervisor_run.HALT_GUARD_KEY, "heartbeat")
     _engage_kill_switch(tmp_path)
     client = _HaltFakeClient()
 
     supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
-    assert client.flattens == 1
+    assert client.flattens == 1, "the kill switch is a different guard and must act"
+    assert store.get_state(supervisor_run.HALT_GUARD_KEY) == "kill_switch"
 
-    store.set_state(HALT_KEY, "something else entirely")
+
+def _stale_heartbeat(store, seconds):
+    from datetime import timedelta
+
+    from glassbox.clock import now_utc
+    from glassbox.supervisor.run import HEARTBEAT_KEY
+
+    store.set_state(HEARTBEAT_KEY, (now_utc() - timedelta(seconds=seconds)).isoformat())
+
+
+def test_a_stale_heartbeat_is_acted_on_once_although_its_reason_keeps_changing(
+    store, audit, tmp_path, monkeypatch
+):
+    """The case the re-fire fix was written for, with the REAL reason.
+
+    The heartbeat reason carries a live count — "(660s > 90s)" then
+    "(678s > 90s)" — so comparing reason text never matched and the supervisor
+    re-audited and re-flattened on every tick of an outage: 8 times in 2
+    minutes on 11 Sep, twice through an Alpaca timeout on 26 Sep. The first
+    fix passed its test only because that test used the kill switch, whose
+    reason never changes.
+    """
+    from glassbox.supervisor import run as supervisor_run
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    client = _HaltFakeClient()
+    reasons = []
+    for age in (660, 678, 696, 714):
+        _stale_heartbeat(store, age)
+        supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
+        reasons.append(store.get_state("halt_reason"))
+
+    assert len(set(reasons)) == 1, "the latched reason is the first one, not rewritten"
+    assert client.flattens == 1, "one outage, one flatten — however the reason text changes"
+
+
+def test_a_stale_marker_never_suppresses_a_new_breach(store, audit, tmp_path, monkeypatch):
+    """The guard marker only counts while a halt is standing. If it outlived a
+    cleared halt, a genuinely new breach of the same guard would look already
+    handled and the flatten would be skipped."""
+    from glassbox.supervisor import run as supervisor_run
+
+    monkeypatch.setattr(supervisor_run.time, "sleep", lambda s: None)
+    store.set_state(supervisor_run.HALT_GUARD_KEY, "heartbeat")  # leftover
+    assert not store.get_state("halt_reason"), "no halt is standing"
+    client = _HaltFakeClient()
+
+    _stale_heartbeat(store, 300)
     supervisor_run.tick(store, audit, client, CFG, tmp_path, dry_run=False)
-    assert client.flattens == 2, "a changed reason is a fresh breach and must act"
+    assert client.flattens == 1, "a leftover marker must not swallow a real breach"
+
+
+def test_every_halting_verdict_names_its_guard():
+    from glassbox.supervisor.guards import GuardAction, evaluate_guards
+
+    cases = {
+        "kill_switch": {"equity": 100_000, "kill_switch": True},
+        "drawdown": {"equity": 90_000},
+        "daily_loss": {"equity": 97_000, "peak_equity": 97_500},
+        "heartbeat": {"equity": 100_000, "heartbeat_age_seconds": 500},
+    }
+    for guard, kw in cases.items():
+        args = {
+            "equity": 100_000,
+            "session_start_equity": 100_000,
+            "peak_equity": 100_000,
+            "cfg": CFG,
+        }
+        args.update(kw)
+        v = evaluate_guards(**args)
+        assert v.action is not GuardAction.CONTINUE, guard
+        assert v.guard == guard, (guard, v.reason)
+    ok = evaluate_guards(100_000, 100_000, 100_000, CFG)
+    assert ok.action is GuardAction.CONTINUE and ok.guard == ""
 
 
 def test_flatten_retries_until_spread_legs_are_gone(audit, monkeypatch):

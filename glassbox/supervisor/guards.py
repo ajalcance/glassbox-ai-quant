@@ -56,6 +56,11 @@ class GuardVerdict:
     reason: str
     daily_pnl_pct: float = 0.0
     drawdown_pct: float = 0.0
+    # WHICH guard fired, as a stable identity. The reason is for humans and
+    # carries live numbers — "trader heartbeat stale (660s > 90s)" becomes
+    # "(678s > 90s)" on the next tick — so it cannot tell a standing breach
+    # from a new one. Empty on CONTINUE.
+    guard: str = ""
 
     @property
     def should_flatten(self) -> bool:
@@ -73,7 +78,7 @@ def evaluate_guards(
 ) -> GuardVerdict:
     """Pure evaluation of the account guards. No I/O."""
     if kill_switch:
-        return GuardVerdict(GuardAction.HALT_HARD, "kill switch engaged by operator")
+        return GuardVerdict(GuardAction.HALT_HARD, "kill switch engaged by operator", guard="kill_switch")
 
     if session_start_equity <= 0 or peak_equity <= 0:
         return GuardVerdict(GuardAction.CONTINUE, "no baseline yet")
@@ -89,6 +94,7 @@ def evaluate_guards(
             f"(peak ${peak_equity:,.0f} -> ${equity:,.0f}); manual reset required",
             daily_pnl_pct,
             drawdown_pct,
+            guard="drawdown",
         )
 
     if daily_pnl_pct <= -cfg.risk.daily_loss_halt_pct:
@@ -97,6 +103,7 @@ def evaluate_guards(
             f"daily loss {daily_pnl_pct:.2f}% breached -{cfg.risk.daily_loss_halt_pct}%",
             daily_pnl_pct,
             drawdown_pct,
+            guard="daily_loss",
         )
 
     # A trader that stopped heartbeating may be wedged mid-position. We cannot
@@ -107,6 +114,7 @@ def evaluate_guards(
             f"trader heartbeat stale ({heartbeat_age_seconds:.0f}s > {heartbeat_timeout:.0f}s)",
             daily_pnl_pct,
             drawdown_pct,
+            guard="heartbeat",
         )
 
     return GuardVerdict(GuardAction.CONTINUE, "within limits", daily_pnl_pct, drawdown_pct)

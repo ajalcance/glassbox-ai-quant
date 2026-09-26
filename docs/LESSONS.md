@@ -520,9 +520,28 @@ While the trader crash-looped, the supervisor's stale-heartbeat verdict fired
 **eight times in two minutes** — eight breach records, eight flattens, seven of
 which closed nothing. Harmless, but it buries the record that matters.
 
-Escalation still has to work both ways: a *different* reason is a new breach and
-must act, and inventory reappearing under a standing halt must still be
-flattened. The halt's promise is an empty book, not a written-down flag.
+Escalation still has to work both ways: a *different guard* firing is a new
+breach and must act, and inventory reappearing under a standing halt must still
+be flattened. The halt's promise is an empty book, not a written-down flag.
+
+**The first fix for this was wrong, and its test proved nothing.** It compared
+the standing halt's *reason text* with the new verdict's. But the heartbeat
+reason embeds a live count — `(660s > 90s)`, then `(678s > 90s)` — so the two
+never matched and the supervisor kept re-firing on every tick of an outage.
+That was precisely the case the fix existed for: on 11 September the reasons
+read `92s`, `111s`, `129s`… The test passed anyway, because it used the kill
+switch, whose reason never changes. It was caught live on 26 September, when
+the supervisor fired twice through an Alpaca timeout.
+
+The real fix compares *which guard* fired — a stable identity carried on the
+verdict — and reads that marker only while a halt is standing, so a leftover
+marker can never make a genuinely new breach look already handled. Its test
+uses the real heartbeat reason with a changing count, and was checked the other
+way round too: put the old comparison back and it fails, re-firing four times.
+
+> **A test only proves a fix if it would have failed without it.** Check that
+> directly — revert the fix, watch the test go red — especially when the test's
+> input is a convenient stand-in for the one that actually broke.
 
 ### In-memory state has a measurable deploy cost
 

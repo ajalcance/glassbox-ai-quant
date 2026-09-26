@@ -31,6 +31,11 @@ from glassbox.supervisor.guards import (
 )
 
 HEARTBEAT_KEY = "trader_heartbeat"
+# Which guard latched the standing halt (GuardVerdict.guard). Written with
+# the halt and read only while a halt is standing: a marker that outlived its
+# halt would make a genuinely new breach of the same guard look already
+# handled, and skip the flatten.
+HALT_GUARD_KEY = "halt_guard"
 
 
 def kill_switch_engaged(root: Path) -> bool:
@@ -150,7 +155,14 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
     # while halted on heartbeat) is a new breach and acts again. And inventory
     # that reappears under a standing halt is re-flattened, because the halt's
     # promise is an empty book, not a written-down flag.
-    if store.get_state(HALT_KEY) == verdict.reason:
+    # Compared by guard identity, NOT by reason text. The first version of this
+    # compared reasons, and the heartbeat reason embeds a live count — 660s,
+    # then 678s — so it never matched and re-fired on every tick of an outage.
+    # That was the exact case it was written for (11 Sep: 92s, 111s, 129s ...);
+    # its test used the kill switch, whose reason never changes, and passed. It
+    # was caught live on 26 Sep, firing twice through an Alpaca timeout.
+    standing = store.get_state(HALT_KEY)
+    if standing and verdict.guard and store.get_state(HALT_GUARD_KEY) == verdict.guard:
         residue = [] if dry_run else list(client.get_all_positions() or [])
         if residue:
             print(
@@ -175,6 +187,7 @@ def tick(store, audit, client, cfg, root: Path, dry_run: bool = False) -> GuardA
     )
     store.set_state(HALT_KEY, verdict.reason)
     store.set_state(HALT_SOURCE_KEY, "supervisor")
+    store.set_state(HALT_GUARD_KEY, verdict.guard)
     print(f"GUARD {verdict.action}: {verdict.reason}", file=sys.stderr)
     if not dry_run:
         flatten_all(client, audit)
