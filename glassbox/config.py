@@ -202,7 +202,17 @@ class Config(BaseModel):
 @lru_cache(maxsize=1)
 def load_config(path: str | Path | None = None) -> Config:
     """Load YAML config and .env. Cached; call load_config.cache_clear() in tests."""
-    load_dotenv(ROOT / ".env")
+    try:
+        load_dotenv(ROOT / ".env")
+    except OSError:
+        # An agent sandbox denies reading .env by design — it holds the broker
+        # keys. python-dotenv checks the file exists, then opens it; if the
+        # sandbox permits the first and refuses the second, this raised and
+        # took every config read down with it, test suite included. Secrets
+        # still arrive through the process environment, which is how the
+        # deployed containers get them anyway (docker's env_file, no .env
+        # inside the image).
+        pass
     cfg_path = Path(path) if path else ROOT / "config" / "default.yaml"
     with open(cfg_path) as f:
         raw = yaml.safe_load(f)

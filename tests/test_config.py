@@ -61,3 +61,21 @@ def test_report_token_budget_accounts_for_reasoning():
     cfg = load_config()
     assert cfg.llm.report_max_tokens >= 2000
     assert cfg.llm.report_max_tokens > cfg.llm.analyst_max_tokens
+
+
+def test_unreadable_dotenv_does_not_break_config(monkeypatch):
+    """A sandboxed agent may see .env exist but be refused reading it. The
+    config — and so every test — must still load; secrets come from the
+    environment."""
+    import glassbox.config as config_module
+
+    def refuse(*a, **k):
+        raise PermissionError("Operation not permitted: .env")
+
+    monkeypatch.setattr(config_module, "load_dotenv", refuse)
+    config_module.load_config.cache_clear()
+    try:
+        cfg = config_module.load_config()
+        assert cfg.account.starting_equity > 0
+    finally:
+        config_module.load_config.cache_clear()
