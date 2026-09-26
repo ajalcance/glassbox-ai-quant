@@ -31,6 +31,16 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# .env holds broker keys and is unreadable to a sandboxed agent by design.
+# testpaths alone does not keep pytest away from it: on its way down to tests/
+# pytest runs pytest_ignore_collect on every rootdir entry, which calls
+# is_dir(), and on macOS a denied stat raises PermissionError instead of
+# returning False — collection died before a single test ran. Ignore patterns
+# are checked BEFORE that is_dir() call, so this keeps pytest from touching the
+# file at all rather than widening the sandbox to let it. Relative on purpose:
+# pytest prefixes the working directory, so "*/.env*" would require an extra
+# folder level and silently never match a .env in the root.
+addopts = ["--ignore-glob=.env*"]
 
 [build-system]
 requires = ["hatchling"]
