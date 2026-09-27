@@ -105,7 +105,11 @@ MUST_BE_DENIED = [
     "uv run python -m glassbox.drills round_trip",
     "uv run python -m glassbox.drills flatten",
     "uv run python -m glassbox.drills cleanup",
-    # Outside the repository's own code.
+    # Outside the repository's own code. Production only through `ssh gbx`.
+    "ssh root@64.177.40.87 uptime",
+    "ssh -o BatchMode=yes root@64.177.40.87 'docker ps'",
+    "ssh glassbox@64.177.40.87 'cd glassbox-ai-quant && git pull'",
+    "sftp root@64.177.40.87",
     "scp local/x.py root@64.177.40.87:/root/",
     "rsync -a . root@64.177.40.87:/tmp/",
     "sudo rm -rf /",
@@ -132,6 +136,8 @@ MUST_STAY_ALLOWED = [
     "gh pr view 5",
     "gh pr checks 5",
     "grep -rn force glassbox",
+    "ssh gbx state",
+    "ssh gbx deploy trader",
     "rm -rf local/tmp",
 ]
 
@@ -209,12 +215,46 @@ def test_no_rule_starts_with_a_flag():
     assert not dead, f"rules that can never match: {dead}"
 
 
-def test_ssh_is_never_pre_approved():
-    """Production is reached through the guarded host commands, not through
-    remembered one-off approvals of arbitrary remote shell."""
-    allowed = _bash_patterns(_rules(_settings(), "allow"))
-    ssh = [p for p in allowed if p.split(" ", 1)[0] in {"ssh", "scp", "rsync"}]
-    assert not ssh, f"pre-approved remote access: {ssh}"
+def test_ssh_is_pre_approved_only_as_the_host_commands():
+    """Production is reached through `ssh gbx <verb>`, which the Bash hook
+    checks word by word and the host's forced command checks again — never
+    through remembered one-off approvals of arbitrary remote shell."""
+    settings = _settings()
+    allowed = _bash_patterns(_rules(settings, "allow"))
+    remote = [p for p in allowed if p.split(" ", 1)[0] in {"ssh", "scp", "sftp", "rsync"}]
+    assert remote in ([], ["ssh gbx *"]), f"pre-approved remote access: {remote}"
+    if remote:
+        assert "Bash" in _hook_matchers(settings), "ssh pre-approved with no Bash hook"
+
+
+def test_agent_cannot_repoint_its_ssh_alias():
+    """The `gbx` alias and its key live in ~/.ssh. Rewriting the alias to the
+    owner's root key would turn the host commands back into a root shell."""
+    deny = set(_rules(_settings(), "deny"))
+    missing = [f"{t}(~/.ssh/**)" for t in EDIT_TOOLS if f"{t}(~/.ssh/**)" not in deny]
+    assert not missing, f"~/.ssh writable by the agent: {missing}"
+
+
+HOOKS = {
+    "Bash": "guard_bash.py",
+    "mcp__alpaca__.*": "guard_mcp.py",
+    "Write|Edit|MultiEdit|NotebookEdit": "guard_write.py",
+}
+
+
+def _hook_matchers(settings: dict) -> dict[str, list[str]]:
+    return {
+        h.get("matcher"): [c.get("command", "") for c in h.get("hooks", [])]
+        for h in settings.get("hooks", {}).get("PreToolUse", [])
+    }
+
+
+def test_guard_hooks_are_wired_and_present():
+    matchers = _hook_matchers(_settings())
+    for matcher, script in HOOKS.items():
+        commands = matchers.get(matcher, [])
+        assert any(script in c for c in commands), f"{script} not wired to {matcher!r}"
+        assert (SETTINGS.parent / "hooks" / script).is_file(), f".claude/hooks/{script} missing"
 
 
 def test_blanket_bash_only_behind_a_bash_hook():

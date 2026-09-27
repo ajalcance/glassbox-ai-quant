@@ -22,6 +22,7 @@ News-driven options trading agent for the Alpaca hackathon (paper trading only).
 - Backend conventions: `docs/ai-development/backend.md`
 - Frontend conventions: `docs/ai-development/frontend.md`
 - Database & audit log schema: `docs/ai-development/database.md`
+- Agent permissions, hooks and production access: `docs/ai-development/agent-permissions.md`
 
 ## Context
 - Full plan + day-by-day schedule: `docs/PLAN.md` (deadline Sep 4 2026 15:00 UTC; flatten all positions Thu Sep 3 close)

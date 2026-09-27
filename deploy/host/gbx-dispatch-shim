@@ -1,0 +1,5 @@
+#!/bin/sh
+# Forced command for the gbxagent key. The client's request arrives in
+# SSH_ORIGINAL_COMMAND and is handed to the dispatcher as ONE argument, never
+# evaluated by this shell. The dispatcher decides whether it runs.
+exec sudo -n /usr/local/sbin/gbx-dispatch "$SSH_ORIGINAL_COMMAND"

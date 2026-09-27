@@ -46,7 +46,8 @@
       "Bash(grep *)",
       "Bash(find *)",
       "Bash(jq *)",
-      "Bash(mkdir *)"
+      "Bash(mkdir *)",
+      "Bash(ssh gbx *)"
     ],
     "deny": [
       "mcp__alpaca__place_option_order",
@@ -66,23 +67,45 @@
       "mcp__alpaca__delete_watchlist_by_id",
       "mcp__alpaca__add_asset_to_watchlist_by_id",
       "mcp__alpaca__remove_asset_from_watchlist_by_id",
-
-      "Read(.env)", "Edit(.env)", "Write(.env)",
-      "Read(.env.local)", "Edit(.env.local)", "Write(.env.local)",
-      "Read(.env.development)", "Edit(.env.development)", "Write(.env.development)",
-      "Read(.env.staging)", "Edit(.env.staging)", "Write(.env.staging)",
-      "Read(.env.production)", "Edit(.env.production)", "Write(.env.production)",
-      "Read(/**/*.pem)", "Read(/**/*.key)", "Read(/**/id_rsa)", "Read(/**/id_ed25519)",
-
-      "Edit(/.claude/settings.json)", "Write(/.claude/settings.json)",
-      "MultiEdit(/.claude/settings.json)", "NotebookEdit(/.claude/settings.json)",
-      "Edit(/.claude/settings.local.json)", "Write(/.claude/settings.local.json)",
-      "MultiEdit(/.claude/settings.local.json)", "NotebookEdit(/.claude/settings.local.json)",
-      "Edit(/.claude/hooks/**)", "Write(/.claude/hooks/**)",
-      "MultiEdit(/.claude/hooks/**)", "NotebookEdit(/.claude/hooks/**)",
-      "Edit(/.mcp.json)", "Write(/.mcp.json)",
-      "MultiEdit(/.mcp.json)", "NotebookEdit(/.mcp.json)",
-
+      "Read(.env)",
+      "Edit(.env)",
+      "Write(.env)",
+      "Read(.env.local)",
+      "Edit(.env.local)",
+      "Write(.env.local)",
+      "Read(.env.development)",
+      "Edit(.env.development)",
+      "Write(.env.development)",
+      "Read(.env.staging)",
+      "Edit(.env.staging)",
+      "Write(.env.staging)",
+      "Read(.env.production)",
+      "Edit(.env.production)",
+      "Write(.env.production)",
+      "Read(/**/*.pem)",
+      "Read(/**/*.key)",
+      "Read(/**/id_rsa)",
+      "Read(/**/id_ed25519)",
+      "Edit(/.claude/settings.json)",
+      "Write(/.claude/settings.json)",
+      "MultiEdit(/.claude/settings.json)",
+      "NotebookEdit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Write(/.claude/settings.local.json)",
+      "MultiEdit(/.claude/settings.local.json)",
+      "NotebookEdit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Write(/.claude/hooks/**)",
+      "MultiEdit(/.claude/hooks/**)",
+      "NotebookEdit(/.claude/hooks/**)",
+      "Edit(/.mcp.json)",
+      "Write(/.mcp.json)",
+      "MultiEdit(/.mcp.json)",
+      "NotebookEdit(/.mcp.json)",
+      "Edit(~/.ssh/**)",
+      "Write(~/.ssh/**)",
+      "MultiEdit(~/.ssh/**)",
+      "NotebookEdit(~/.ssh/**)",
       "Bash(git tag*)",
       "Bash(git push *--tags*)",
       "Bash(git push *--force*)",
@@ -107,7 +130,6 @@
       "Bash(gh gist*)",
       "Bash(npm publish*)",
       "Bash(uv publish*)",
-
       "Bash(*--admin*)",
       "Bash(*--no-verify*)",
       "Bash(*core.hooksPath*)",
@@ -122,7 +144,6 @@
       "Bash(gh api *--raw-field*)",
       "Bash(gh api *--input*)",
       "Bash(gh api *labels*)",
-
       "Bash(make run*)",
       "Bash(make supervisor*)",
       "Bash(make drill-trip*)",
@@ -136,7 +157,9 @@
       "Bash(*-m glassbox.drills round_trip*)",
       "Bash(*-m glassbox.drills flatten*)",
       "Bash(*-m glassbox.drills cleanup*)",
-
+      "Bash(ssh *root@*)",
+      "Bash(ssh *glassbox@*)",
+      "Bash(sftp *)",
       "Bash(scp *)",
       "Bash(rsync *)",
       "Bash(sudo *)",
@@ -146,5 +169,36 @@
   "attribution": {
     "commit": "",
     "pr": ""
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__alpaca__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_mcp.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_write.py\""
+          }
+        ]
+      }
+    ]
   }
 }
